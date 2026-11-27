@@ -1,5 +1,10 @@
 # Change Log
 
+## 0.2.1
+
+- 优化扩展名称、简介与搜索关键词（支持检索 `Antigravity`、`反重力`、`agy`）
+- 精简扩展详情页文档内容
+
 ## 0.2.0
 
 - 支持在 VS Code 与 Cursor 侧边栏通过 ACP 运行 Antigravity 编程助手

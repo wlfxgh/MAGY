@@ -1,8 +1,8 @@
 {
   "name": "magy",
-  "displayName": "MAGY",
-  "description": "在 VS Code 和 Cursor 侧边栏中集成 Antigravity (ACP) 的 AI 编程助手，支持代码上下文引用、交互式问答、用量统计与 Cursor 对话导入。",
-  "version": "0.2.0",
+  "displayName": "MAGY - Antigravity (反重力) AI",
+  "description": "在 VS Code 和 Cursor 侧边栏中使用 Antigravity（反重力 / agy）AI 编程助手，支持代码上下文引用、交互式问答、用量统计与 Cursor 对话导入。",
+  "version": "0.2.1",
   "publisher": "wlfxgh",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -26,13 +26,14 @@
     "Chat"
   ],
   "keywords": [
-    "ai",
-    "agent",
-    "acp",
     "antigravity",
+    "反重力",
+    "agy",
+    "acp",
     "gemini",
     "cursor",
-    "chat"
+    "ai",
+    "agent"
   ],
   "activationEvents": [],
   "main": "./out/extension.js",

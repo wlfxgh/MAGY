@@ -1,6 +1,6 @@
 # MAGY
 
-在 VS Code 与 Cursor 侧边栏中集成 Antigravity（ACP）的 AI 编程助手扩展，支持独立运行时管理、代码上下文引用、交互式问答、用量与 Token 统计以及 Cursor 对话导入。
+在 VS Code 与 Cursor 侧边栏中集成 Antigravity（反重力 / `agy`）与 ACP（Agent Client Protocol）的 AI 编程助手扩展，支持独立运行时管理、代码上下文引用、交互式问答、用量与 Token 统计以及 Cursor 对话导入。
 
 ## 主要功能
 
@@ -39,17 +39,6 @@
 | `magy.extraArgs` | 附加在 `acp` 子命令后的自定义参数列表 |
 | `magy.cursorDataDir` | 自定义本机 Cursor 用户数据目录；留空时按系统默认路径自动探测 |
 | `magy.fontSize` | 侧边栏字体大小（px，范围 `11–22`，默认 `14`） |
-
-## 本地开发
-
-```bash
-npm install
-npm run compile
-npm run watch   # 启动增量监听；随后在 VS Code 中按 F5 调试扩展
-npm run lint
-node out/selftest.js
-npm run package # 生成 .vsix 安装包
-```
 
 ## License
 
