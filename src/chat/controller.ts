@@ -6,6 +6,7 @@ import { AcpConnection, isAuthError } from "../acp/connection";
 import { contentText, emptyTokenUsage, extractDiffs, flattenOptions, mergeTokenUsage, readAntigravityTier, readAuthMethods, readPromptUsage, readStopReason } from "../acp/content";
 import { buildElicitationResponse, parseElicitationRequest } from "../acp/elicitation";
 import { ClientTools } from "../acp/tools";
+import { createAbortError, isAbortError } from "../agent/download";
 import { fetchCreditsQuota, fetchUsageQuota } from "../agent/quota";
 import { AgyRuntime } from "../agent/runtime";
 import { type CursorConversationSummary } from "../cursor/discover";
@@ -68,6 +69,7 @@ export class ChatController implements vscode.Disposable {
     private hasEverAuthenticated = false;
     private runtimeLabel = "未安装";
     private runtimeBinary = "";
+    private runtimeInstalled = false;
     private quota: QuotaStateView = { loading: false, groups: [] };
     private quotaPromise: Promise<void> | undefined;
     private quotaCliChain: Promise<void> = Promise.resolve();
@@ -97,6 +99,8 @@ export class ChatController implements vscode.Disposable {
     private turnToken = "";
     private recordedUsageTurnToken = "";
     private connectionPromise: Promise<void> | undefined;
+    private connectGeneration = 0;
+    private connectAbort: AbortController | undefined;
     private sessionChain: Promise<void> = Promise.resolve();
     private deltaTimer: ReturnType<typeof setTimeout> | undefined;
     private saveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -238,7 +242,11 @@ export class ChatController implements vscode.Disposable {
             void vscode.window.showWarningMessage("当前正在生成，请稍后再更新反重力");
             return;
         }
+        const prevVersion = /^内置\s+(.+)$/.exec(this.runtimeLabel)?.[1] ?? "";
         this.stopProcess();
+        const gen = this.connectGeneration;
+        const abort = new AbortController();
+        this.connectAbort = abort;
         this.status = "connecting";
         this.statusText = "正在更新反重力";
         this.pushStatus();
@@ -248,20 +256,43 @@ export class ChatController implements vscode.Disposable {
                 proxy: network.proxy,
                 noProxy: network.noProxy,
                 force: true,
+                signal: abort.signal,
                 onProgress: (text) => {
+                    if (this.disposed || gen !== this.connectGeneration) {
+                        return;
+                    }
                     this.statusText = text;
                     this.pushStatus();
                 },
             });
+            if (this.disposed || gen !== this.connectGeneration) {
+                return;
+            }
             this.runtimeBinary = info.binary;
+            this.runtimeInstalled = true;
             this.runtimeLabel = `内置 ${info.version}`;
-            this.status = "disconnected";
-            this.statusText = this.settings.binaryPath
-                ? `已更新内置版本 ${info.version}（当前仍使用 magy.binaryPath 指定的路径）`
-                : `已安装 ${info.version}`;
+            if (this.settings.binaryPath) {
+                this.status = "disconnected";
+                this.statusText = `已更新内置版本 ${info.version}（当前仍使用 magy.binaryPath 指定的路径）`;
+                this.pushStatus();
+                return;
+            }
+            const unchanged = Boolean(prevVersion && prevVersion === info.version);
+            this.status = "connecting";
+            this.statusText = unchanged
+                ? `当前已是最新版本 ${info.version}，正在重连`
+                : `已更新至 ${info.version}，正在重连`;
             this.pushStatus();
+            void this.rebindActiveAfterRestart();
         } catch (error) {
+            if (this.disposed || gen !== this.connectGeneration || isAbortError(error)) {
+                return;
+            }
             this.fail(withNetworkHint(error));
+        } finally {
+            if (this.connectAbort === abort) {
+                this.connectAbort = undefined;
+            }
         }
     }
 
@@ -304,6 +335,10 @@ export class ChatController implements vscode.Disposable {
             this.pushStatus();
             return;
         }
+        if (!this.runtimeInstalled && (this.status === "setup" || this.status === "error")) {
+            void this.syncUninstalledAfterSettings();
+            return;
+        }
         if (this.busy) {
             this.restartAfterTurn = true;
             this.statusText = "设置已更改，当前回合结束后重连";
@@ -326,6 +361,18 @@ export class ChatController implements vscode.Disposable {
         this.pushStatus();
     }
 
+    private async syncUninstalledAfterSettings(): Promise<void> {
+        const installed = await this.runtime.inspectInstalled(this.settings.binaryPath || undefined);
+        if (installed && this.settings.binaryPath) {
+            this.runtimeInstalled = true;
+            this.runtimeBinary = installed.binary;
+            this.runtimeLabel = "自定义路径";
+            void this.rebindActiveAfterRestart();
+            return;
+        }
+        this.pushStatus();
+    }
+
     private async rebindActiveAfterRestart(): Promise<void> {
         try {
             await this.ensureConnection();
@@ -333,7 +380,27 @@ export class ChatController implements vscode.Disposable {
                 await this.bindSession(this.active);
             }
         } catch (error) {
+            if (isAbortError(error)) {
+                return;
+            }
             this.fail(withNetworkHint(error));
+        }
+    }
+
+    private async writeSetting(key: string, value: unknown): Promise<void> {
+        const cfg = vscode.workspace.getConfiguration("magy");
+        const inspected = cfg.inspect(key);
+        await cfg.update(key, value, vscode.ConfigurationTarget.Global);
+        if (inspected?.workspaceValue !== undefined) {
+            await cfg.update(key, value, vscode.ConfigurationTarget.Workspace);
+        }
+        if (inspected?.workspaceFolderValue !== undefined && vscode.workspace.workspaceFolders?.length) {
+            for (const folder of vscode.workspace.workspaceFolders) {
+                const folderCfg = vscode.workspace.getConfiguration("magy", folder.uri);
+                if (folderCfg.inspect(key)?.workspaceFolderValue !== undefined) {
+                    await folderCfg.update(key, value, vscode.ConfigurationTarget.WorkspaceFolder);
+                }
+            }
         }
     }
 
@@ -344,32 +411,40 @@ export class ChatController implements vscode.Disposable {
         if (proxy === current && proxy === this.network().proxy) {
             return;
         }
-        await cfg.update("proxy", proxy, vscode.ConfigurationTarget.Global);
+        try {
+            await this.writeSetting("proxy", proxy);
+        } catch (error) {
+            void vscode.window.showErrorMessage(`保存代理设置失败：${errorMessage(error)}`);
+            this.pushStatus();
+        }
     }
 
     private async updateSettings(rawPatch: unknown): Promise<void> {
         const patch = asRecord(rawPatch);
-        const cfg = vscode.workspace.getConfiguration("magy");
-        if (typeof patch.proxy === "string") {
-            await cfg.update("proxy", normalizeProxy(patch.proxy), vscode.ConfigurationTarget.Global);
-        }
-        if (typeof patch.noProxy === "string") {
-            await cfg.update("noProxy", patch.noProxy.trim() || "localhost,127.0.0.1,::1", vscode.ConfigurationTarget.Global);
-        }
-        if (typeof patch.dangerouslySkipPermissions === "boolean") {
-            await cfg.update("dangerouslySkipPermissions", patch.dangerouslySkipPermissions, vscode.ConfigurationTarget.Global);
-        }
-        if (typeof patch.sandbox === "boolean") {
-            await cfg.update("sandbox", patch.sandbox, vscode.ConfigurationTarget.Global);
-        }
-        if (typeof patch.binaryPath === "string") {
-            await cfg.update("binaryPath", patch.binaryPath.trim(), vscode.ConfigurationTarget.Global);
-        }
-        if (typeof patch.cursorDataDir === "string") {
-            await cfg.update("cursorDataDir", patch.cursorDataDir.trim(), vscode.ConfigurationTarget.Global);
-        }
-        if (patch.fontSize !== undefined) {
-            await cfg.update("fontSize", normalizeFontSize(patch.fontSize), vscode.ConfigurationTarget.Global);
+        try {
+            if (typeof patch.proxy === "string") {
+                await this.writeSetting("proxy", normalizeProxy(patch.proxy));
+            }
+            if (typeof patch.noProxy === "string") {
+                await this.writeSetting("noProxy", patch.noProxy.trim() || "localhost,127.0.0.1,::1");
+            }
+            if (typeof patch.dangerouslySkipPermissions === "boolean") {
+                await this.writeSetting("dangerouslySkipPermissions", patch.dangerouslySkipPermissions);
+            }
+            if (typeof patch.sandbox === "boolean") {
+                await this.writeSetting("sandbox", patch.sandbox);
+            }
+            if (typeof patch.binaryPath === "string") {
+                await this.writeSetting("binaryPath", patch.binaryPath.trim());
+            }
+            if (typeof patch.cursorDataDir === "string") {
+                await this.writeSetting("cursorDataDir", patch.cursorDataDir.trim());
+            }
+            if (patch.fontSize !== undefined) {
+                await this.writeSetting("fontSize", normalizeFontSize(patch.fontSize));
+            }
+        } catch (error) {
+            void vscode.window.showErrorMessage(`保存设置失败：${errorMessage(error)}`);
         }
         this.settings = readSettings();
         this.pushStatus();
@@ -470,6 +545,12 @@ export class ChatController implements vscode.Disposable {
                 case "install":
                     await this.installRuntime();
                     return;
+                case "startSetup":
+                    await this.startSetup(typeof record.proxy === "string" ? record.proxy : undefined);
+                    return;
+                case "moveView":
+                    await vscode.commands.executeCommand("magy.moveView");
+                    return;
                 case "showLog":
                     this.output.show(true);
                     return;
@@ -495,6 +576,9 @@ export class ChatController implements vscode.Disposable {
                     return;
             }
         } catch (error) {
+            if (isAbortError(error)) {
+                return;
+            }
             this.fail(withNetworkHint(error));
         }
     }
@@ -502,11 +586,58 @@ export class ChatController implements vscode.Disposable {
     private async bootstrap(): Promise<void> {
         await this.current();
         this.ensureFallbackAuth();
+        const installed = await this.runtime.inspectInstalled(this.settings.binaryPath || undefined);
+        if (!installed) {
+            this.runtimeInstalled = false;
+            this.runtimeBinary = "";
+            this.runtimeLabel = "未安装";
+            this.status = "setup";
+            this.statusText = "等待初始化";
+            this.postSnapshot();
+            this.scheduleCursorWarmup(800);
+            return;
+        }
+        this.runtimeInstalled = true;
+        this.runtimeBinary = installed.binary;
+        this.runtimeLabel = installed.managed ? `内置 ${installed.version}` : "自定义路径";
+        this.status = "connecting";
+        this.statusText = "等待连接";
         this.postSnapshot();
         this.scheduleCursorWarmup(800);
         try {
             await this.ensureSession(await this.current());
         } catch (error) {
+            if (isAbortError(error)) {
+                return;
+            }
+            this.fail(withNetworkHint(error));
+        }
+    }
+
+    private async startSetup(rawProxy?: string): Promise<void> {
+        if (typeof rawProxy === "string") {
+            const normalized = normalizeProxy(rawProxy);
+            const cfg = vscode.workspace.getConfiguration("magy");
+            const currentExplicit = normalizeProxy(String(cfg.get("proxy", "") ?? ""));
+            if (normalized !== currentExplicit) {
+                try {
+                    await this.writeSetting("proxy", normalized);
+                } catch (error) {
+                    void vscode.window.showErrorMessage(`保存代理设置失败：${errorMessage(error)}`);
+                }
+                this.settings = readSettings();
+            }
+        }
+        this.stopProcess();
+        this.status = "connecting";
+        this.statusText = "正在准备下载 Antigravity";
+        this.pushStatus();
+        try {
+            await this.ensureSession(await this.current());
+        } catch (error) {
+            if (isAbortError(error)) {
+                return;
+            }
             this.fail(withNetworkHint(error));
         }
     }
@@ -516,6 +647,9 @@ export class ChatController implements vscode.Disposable {
         try {
             await this.ensureSession(await this.current());
         } catch (error) {
+            if (isAbortError(error)) {
+                return;
+            }
             this.fail(withNetworkHint(error));
         }
     }
@@ -1100,74 +1234,97 @@ export class ChatController implements vscode.Disposable {
     }
 
     private async startConnection(): Promise<void> {
-        const connectLabel = this.hasAuthenticatedInSession ? "正在重新连接" : "等待连接";
-        this.status = "connecting";
-        this.statusText = connectLabel;
-        this.pushStatus();
-        const network = this.network();
-        const info = await this.runtime.ensure({
-            proxy: network.proxy,
-            noProxy: network.noProxy,
-            binaryPath: this.settings.binaryPath,
-            onProgress: (text) => {
-                this.statusText = text;
-                this.pushStatus();
-            },
-        });
-        this.runtimeBinary = info.binary;
-        this.runtimeLabel = info.managed ? `内置 ${info.version}` : `自定义路径`;
-        const logFile = path.join(this.context.globalStorageUri.fsPath, "logs", "acp.log");
-        await fs.mkdir(path.dirname(logFile), { recursive: true });
-        const args = ["acp", "--log-file", logFile];
-        if (this.settings.sandbox && !this.settings.extraArgs.includes("--sandbox")) {
-            args.push("--sandbox");
-        }
-        if (this.isSkipPermissions() && !this.settings.extraArgs.includes("--dangerously-skip-permissions")) {
-            args.push("--dangerously-skip-permissions");
-        }
-        args.push(...this.settings.extraArgs);
-        const apiKey = await this.context.secrets.get(API_KEY_SECRET) || await this.context.secrets.get(LEGACY_API_KEY_SECRET);
-        const connection = new AcpConnection(info.binary, args, {
-            cwd: workspaceCwd(),
-            env: agentEnv(this.settings, apiKey),
-            onStderr: (text) => this.output.append(text),
-            onProtocolError: (text) => this.output.appendLine(text),
-        });
-        this.connection = connection;
-        connection.setExitHandler((code) => {
-            if (this.disposed || this.connection !== connection) {
-                return;
+        const gen = this.connectGeneration;
+        const abort = new AbortController();
+        this.connectAbort = abort;
+        try {
+            const connectLabel = this.hasAuthenticatedInSession ? "正在重新连接" : "等待连接";
+            this.status = "connecting";
+            this.statusText = connectLabel;
+            this.pushStatus();
+            const network = this.network();
+            const info = await this.runtime.ensure({
+                proxy: network.proxy,
+                noProxy: network.noProxy,
+                binaryPath: this.settings.binaryPath,
+                signal: abort.signal,
+                onProgress: (text) => {
+                    if (this.disposed || gen !== this.connectGeneration) {
+                        return;
+                    }
+                    this.statusText = text;
+                    this.pushStatus();
+                },
+            });
+            if (this.disposed || gen !== this.connectGeneration) {
+                throw createAbortError();
             }
-            this.connection = undefined;
-            this.initialized = false;
-            this.activeSessionId = undefined;
-            this.fail(`反重力进程已退出 (${code ?? "未知"})`);
-        });
-        connection.setNotificationHandler((method, params) => {
-            if (method === "session/update") {
-                this.onUpdate(params);
+            this.runtimeBinary = info.binary;
+            this.runtimeInstalled = true;
+            this.runtimeLabel = info.managed ? `内置 ${info.version}` : `自定义路径`;
+            const logFile = path.join(this.context.globalStorageUri.fsPath, "logs", "acp.log");
+            await fs.mkdir(path.dirname(logFile), { recursive: true });
+            const args = ["acp", "--log-file", logFile];
+            if (this.settings.sandbox && !this.settings.extraArgs.includes("--sandbox")) {
+                args.push("--sandbox");
             }
-        });
-        connection.setRequestHandler((method, params) => this.onAgentRequest(method, params));
-        this.statusText = connectLabel;
-        this.pushStatus();
-        const init = await connection.request("initialize", {
-            protocolVersion: 1,
-            clientCapabilities: {
-                fs: { readTextFile: true, writeTextFile: true },
-                terminal: true,
-                elicitation: { form: {} },
-            },
-            clientInfo: { name: "magy", title: "MAGY", version: String(this.context.extension.packageJSON.version ?? "0.2.0") },
-        }, 30000);
-        this.initialized = true;
-        const record = asRecord(init);
-        this.protocolVersion = Number(record.protocolVersion ?? 1);
-        this.authMethods = googleOnly(readAuthMethods(record.authMethods));
-        this.ensureFallbackAuth();
-        this.output.appendLine(`已连接 ${this.runtimeLabel}，协议版本 ${this.protocolVersion}`);
-        this.output.appendLine(`ACP 日志：${logFile}`);
-        this.pushStatus();
+            if (this.isSkipPermissions() && !this.settings.extraArgs.includes("--dangerously-skip-permissions")) {
+                args.push("--dangerously-skip-permissions");
+            }
+            args.push(...this.settings.extraArgs);
+            const apiKey = await this.context.secrets.get(API_KEY_SECRET) || await this.context.secrets.get(LEGACY_API_KEY_SECRET);
+            if (this.disposed || gen !== this.connectGeneration) {
+                throw createAbortError();
+            }
+            const connection = new AcpConnection(info.binary, args, {
+                cwd: workspaceCwd(),
+                env: agentEnv(this.settings, apiKey),
+                onStderr: (text) => this.output.append(text),
+                onProtocolError: (text) => this.output.appendLine(text),
+            });
+            this.connection = connection;
+            connection.setExitHandler((code) => {
+                if (this.disposed || this.connection !== connection) {
+                    return;
+                }
+                this.connection = undefined;
+                this.initialized = false;
+                this.activeSessionId = undefined;
+                this.fail(`反重力进程已退出 (${code ?? "未知"})`);
+            });
+            connection.setNotificationHandler((method, params) => {
+                if (method === "session/update") {
+                    this.onUpdate(params);
+                }
+            });
+            connection.setRequestHandler((method, params) => this.onAgentRequest(method, params));
+            this.statusText = connectLabel;
+            this.pushStatus();
+            const init = await connection.request("initialize", {
+                protocolVersion: 1,
+                clientCapabilities: {
+                    fs: { readTextFile: true, writeTextFile: true },
+                    terminal: true,
+                    elicitation: { form: {} },
+                },
+                clientInfo: { name: "magy", title: "MAGY", version: String(this.context.extension.packageJSON.version ?? "0.2.0") },
+            }, 30000);
+            if (this.disposed || gen !== this.connectGeneration || this.connection !== connection) {
+                throw createAbortError();
+            }
+            this.initialized = true;
+            const record = asRecord(init);
+            this.protocolVersion = Number(record.protocolVersion ?? 1);
+            this.authMethods = googleOnly(readAuthMethods(record.authMethods));
+            this.ensureFallbackAuth();
+            this.output.appendLine(`已连接 ${this.runtimeLabel}，协议版本 ${this.protocolVersion}`);
+            this.output.appendLine(`ACP 日志：${logFile}`);
+            this.pushStatus();
+        } finally {
+            if (this.connectAbort === abort) {
+                this.connectAbort = undefined;
+            }
+        }
     }
 
     private bindSession(chat: ChatRecord, forPrompt = false): Promise<void> {
@@ -1908,6 +2065,10 @@ export class ChatController implements vscode.Disposable {
     }
 
     private stopProcess(): void {
+        this.connectGeneration += 1;
+        this.connectAbort?.abort();
+        this.connectAbort = undefined;
+        this.connectionPromise = undefined;
         const current = this.connection;
         this.connection = undefined;
         this.initialized = false;
@@ -2373,6 +2534,7 @@ export class ChatController implements vscode.Disposable {
             status: this.status,
             statusText: this.statusText,
             runtimeLabel: this.runtimeLabel,
+            runtimeInstalled: this.runtimeInstalled,
             proxy: this.proxyLabel(),
             proxyUrl: this.network().proxy,
             usageText: this.activeUsageText(),
@@ -2891,6 +3053,7 @@ function htmlFor(webview: vscode.Webview, extensionUri: vscode.Uri): string {
 <footer>
   <div id="elicitation" class="card" hidden></div>
   <div id="permission" class="card" hidden></div>
+  <div id="setup" class="card" hidden></div>
   <div id="auth" class="card" hidden></div>
   <div id="slash" hidden></div>
   <div class="composer">

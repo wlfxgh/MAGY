@@ -118,7 +118,7 @@ export function durationLabel(message: StoredMessage): string {
 }
 
 export function proxyDisplay(url?: string): string {
-    return String(url || "").replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
+    return String(url || "").replace(/^http:\/\//i, "");
 }
 
 export function formatTokenCount(n: number): string {
@@ -178,6 +178,7 @@ export function emptyState(): ViewState {
         status: "connecting",
         statusText: "等待连接",
         runtimeLabel: "",
+        runtimeInstalled: true,
         proxy: "",
         proxyUrl: "",
         usageText: "",

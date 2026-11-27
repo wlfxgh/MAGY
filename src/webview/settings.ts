@@ -30,6 +30,53 @@ export function applyTypography(ui: UiState): void {
     document.documentElement.style.setProperty("--magy-font-size", `${size}px`);
 }
 
+function normalizeProxyInput(value: string): string {
+    const trimmed = value.trim();
+    if (!trimmed) {
+        return "";
+    }
+    return /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+}
+
+function markPendingField(el: HTMLInputElement, displayValue: string): void {
+    el.dataset.dirty = "";
+    el.dataset.pendingValue = displayValue;
+    el.dataset.pendingUntil = String(Date.now() + 3000);
+}
+
+function clearFieldTracking(el: HTMLInputElement): void {
+    el.dataset.dirty = "";
+    el.dataset.pendingValue = "";
+    el.dataset.pendingUntil = "";
+}
+
+function attachDraftHandlers(el: HTMLInputElement): void {
+    el.addEventListener("input", () => {
+        el.dataset.dirty = "1";
+    });
+    el.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+            el.dataset.dirty = "";
+        }
+    });
+}
+
+function syncProxyHint(settingsEl: HTMLElement, cfg: SettingsView): void {
+    const proxyHint = settingsEl.querySelector<HTMLElement>('[data-hint="proxy"]');
+    if (!proxyHint) {
+        return;
+    }
+    const effective = proxyDisplay(cfg.effectiveProxy);
+    const explicit = proxyDisplay(cfg.proxy);
+    if (explicit) {
+        proxyHint.textContent = `当前已指定：${explicit}`;
+    } else if (effective) {
+        proxyHint.textContent = `当前自动继承编辑器代理：${effective}`;
+    } else {
+        proxyHint.textContent = "当前未启用代理";
+    }
+}
+
 function flashSettingsSaved(ui: UiState, settingsEl: HTMLElement | null, text: string): void {
     if (!settingsEl) {
         return;
@@ -157,6 +204,7 @@ export function renderSettings(ctx: SettingsContext, resetInputs: boolean): void
             const next = clampFontSize(raw);
             ui.state.settings = Object.assign({}, currentSettings(ui), { fontSize: next });
             fontInput.value = String(next);
+            markPendingField(fontInput, String(next));
             decBtn.disabled = next <= MIN_FONT_SIZE;
             incBtn.disabled = next >= MAX_FONT_SIZE;
             fontResetBtn.disabled = next === DEFAULT_FONT_SIZE;
@@ -165,6 +213,7 @@ export function renderSettings(ctx: SettingsContext, resetInputs: boolean): void
             vscode.postMessage({ type: "updateSettings", patch: { fontSize: next } });
             flashSettingsSaved(ui, settingsEl, `字体 ${next} px`);
         };
+        attachDraftHandlers(fontInput);
         decBtn.addEventListener("click", () => commitFontSize(currentSettings(ui).fontSize - 1));
         incBtn.addEventListener("click", () => commitFontSize(currentSettings(ui).fontSize + 1));
         fontResetBtn.addEventListener("click", () => commitFontSize(DEFAULT_FONT_SIZE));
@@ -205,6 +254,7 @@ export function renderSettings(ctx: SettingsContext, resetInputs: boolean): void
         proxyInput.spellcheck = false;
         proxyInput.autocomplete = "off";
         proxyInput.placeholder = "http://127.0.0.1:7890（留空继承编辑器）";
+        attachDraftHandlers(proxyInput);
         const proxyClear = document.createElement("button");
         proxyClear.type = "button";
         proxyClear.className = "settings-mini-btn ghost";
@@ -215,14 +265,23 @@ export function renderSettings(ctx: SettingsContext, resetInputs: boolean): void
         proxySave.textContent = "应用";
 
         const commitProxy = (value: string): void => {
-            vscode.postMessage({ type: "updateSettings", patch: { proxy: value } });
-            flashSettingsSaved(ui, settingsEl, "代理已更新");
+            const normalized = normalizeProxyInput(value);
+            const display = proxyDisplay(normalized);
+            proxyInput.value = display;
+            markPendingField(proxyInput, display);
+            const prev = currentSettings(ui);
+            const nextSettings: SettingsView = {
+                ...prev,
+                proxy: normalized,
+                effectiveProxy: normalized || (prev.proxy ? "" : prev.effectiveProxy),
+            };
+            ui.state.settings = nextSettings;
+            syncProxyHint(settingsEl, nextSettings);
+            vscode.postMessage({ type: "updateSettings", patch: { proxy: normalized } });
+            flashSettingsSaved(ui, settingsEl, normalized ? "代理已更新" : "已清空代理");
         };
         proxySave.addEventListener("click", () => commitProxy(proxyInput.value));
-        proxyClear.addEventListener("click", () => {
-            proxyInput.value = "";
-            commitProxy("");
-        });
+        proxyClear.addEventListener("click", () => commitProxy(""));
         proxyInput.addEventListener("keydown", (event) => {
             if (event.isComposing || event.keyCode === 229) {
                 return;
@@ -251,12 +310,17 @@ export function renderSettings(ctx: SettingsContext, resetInputs: boolean): void
         noProxyInput.spellcheck = false;
         noProxyInput.autocomplete = "off";
         noProxyInput.placeholder = "localhost,127.0.0.1,::1";
+        attachDraftHandlers(noProxyInput);
         const noProxySave = document.createElement("button");
         noProxySave.type = "button";
         noProxySave.className = "settings-mini-btn";
         noProxySave.textContent = "应用";
         const commitNoProxy = (): void => {
-            vscode.postMessage({ type: "updateSettings", patch: { noProxy: noProxyInput.value } });
+            const next = noProxyInput.value.trim() || "localhost,127.0.0.1,::1";
+            noProxyInput.value = next;
+            markPendingField(noProxyInput, next);
+            ui.state.settings = Object.assign({}, currentSettings(ui), { noProxy: next });
+            vscode.postMessage({ type: "updateSettings", patch: { noProxy: next } });
             flashSettingsSaved(ui, settingsEl, "已保存");
         };
         noProxySave.addEventListener("click", commitNoProxy);
@@ -303,7 +367,10 @@ export function renderSettings(ctx: SettingsContext, resetInputs: boolean): void
             const track = document.createElement("span");
             track.className = "settings-switch";
             input.addEventListener("change", () => {
-                const patch: SettingsPatch = { [field]: input.checked };
+                const checked = input.checked;
+                markPendingField(input, String(checked));
+                ui.state.settings = Object.assign({}, currentSettings(ui), { [field]: checked });
+                const patch: SettingsPatch = { [field]: checked };
                 vscode.postMessage({ type: "updateSettings", patch });
                 flashSettingsSaved(ui, settingsEl, "已保存");
             });
@@ -340,12 +407,17 @@ export function renderSettings(ctx: SettingsContext, resetInputs: boolean): void
             inp.spellcheck = false;
             inp.autocomplete = "off";
             inp.placeholder = placeholder;
+            attachDraftHandlers(inp);
             const btn = document.createElement("button");
             btn.type = "button";
             btn.className = "settings-mini-btn";
             btn.textContent = "应用";
             const commit = (): void => {
-                const patch: SettingsPatch = { [field]: inp.value };
+                const next = inp.value.trim();
+                inp.value = next;
+                markPendingField(inp, next);
+                ui.state.settings = Object.assign({}, currentSettings(ui), { [field]: next });
+                const patch: SettingsPatch = { [field]: next };
                 vscode.postMessage({ type: "updateSettings", patch });
                 flashSettingsSaved(ui, settingsEl, "已保存");
             };
@@ -421,13 +493,33 @@ export function renderSettings(ctx: SettingsContext, resetInputs: boolean): void
         if (!el) {
             return;
         }
+        if (resetInputs) {
+            clearFieldTracking(el);
+            if (el.type === "checkbox") {
+                el.checked = Boolean(value);
+            } else {
+                el.value = String(value);
+            }
+            return;
+        }
+        const incoming = el.type === "checkbox" ? String(Boolean(value)) : String(value);
+        const until = Number(el.dataset.pendingUntil || "0");
+        if (until > 0) {
+            if (incoming === (el.dataset.pendingValue ?? "") || Date.now() >= until) {
+                el.dataset.pendingUntil = "";
+                el.dataset.pendingValue = "";
+            } else {
+                return;
+            }
+        }
         if (el.type === "checkbox") {
             el.checked = Boolean(value);
             return;
         }
-        if (resetInputs || document.activeElement !== el) {
-            el.value = String(value);
+        if (el.dataset.dirty === "1" || document.activeElement === el) {
+            return;
         }
+        el.value = String(value);
     };
     setFieldValue("proxy", proxyDisplay(cfg.proxy));
     setFieldValue("noProxy", cfg.noProxy);
@@ -449,16 +541,9 @@ export function renderSettings(ctx: SettingsContext, resetInputs: boolean): void
         resetFontBtn.disabled = cfg.fontSize === DEFAULT_FONT_SIZE;
     }
 
-    const proxyHint = settingsEl.querySelector<HTMLElement>('[data-hint="proxy"]');
-    if (proxyHint) {
-        const effective = proxyDisplay(cfg.effectiveProxy);
-        const explicit = proxyDisplay(cfg.proxy);
-        if (explicit) {
-            proxyHint.textContent = `当前已指定：${explicit}`;
-        } else if (effective) {
-            proxyHint.textContent = `当前自动继承编辑器代理：${effective}`;
-        } else {
-            proxyHint.textContent = "当前未启用代理";
-        }
+    const proxyEl = settingsEl.querySelector<HTMLInputElement>('input[data-field="proxy"]');
+    const proxyPending = Boolean(proxyEl && Number(proxyEl.dataset.pendingUntil || "0") > Date.now());
+    if (resetInputs || !proxyPending) {
+        syncProxyHint(settingsEl, cfg);
     }
 }

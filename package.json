@@ -2,7 +2,7 @@
   "name": "magy",
   "displayName": "MAGY - Antigravity (反重力) AI",
   "description": "在 VS Code 和 Cursor 侧边栏中使用 Antigravity（反重力 / agy）AI 编程助手，支持代码上下文引用、交互式问答、用量统计与 Cursor 对话导入。",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "publisher": "wlfxgh",
   "license": "MIT",
   "icon": "media/icon.png",

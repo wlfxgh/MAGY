@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { downloadVerified, fetchManifest } from "./download";
+import { createAbortError, downloadVerified, fetchManifest, isAbortError } from "./download";
 import { errorMessage, redactProxy } from "../util";
 
 export interface RuntimeInfo {
@@ -15,6 +15,7 @@ export interface EnsureOptions {
     noProxy?: string;
     binaryPath?: string;
     force?: boolean;
+    signal?: AbortSignal;
     onProgress?: (text: string) => void;
 }
 
@@ -29,7 +30,24 @@ export class AgyRuntime {
         return run;
     }
 
+    async inspectInstalled(binaryPath?: string): Promise<RuntimeInfo | undefined> {
+        if (binaryPath) {
+            return (await exists(binaryPath))
+                ? { binary: binaryPath, version: "自定义", managed: false }
+                : undefined;
+        }
+        const binary = this.binaryPath();
+        if (!(await exists(binary))) {
+            return undefined;
+        }
+        const version = (await readText(path.join(this.root, "VERSION"))) || "未知";
+        return { binary, version, managed: true };
+    }
+
     private async ensureInner(options: EnsureOptions): Promise<RuntimeInfo> {
+        if (options.signal?.aborted) {
+            throw createAbortError();
+        }
         const lead = options.proxy ? "正在通过代理" : "正在";
         if (options.proxy) {
             this.log(`网络代理：${redactProxy(options.proxy)}`);
@@ -47,19 +65,26 @@ export class AgyRuntime {
             return { binary, version, managed: true };
         }
         options.onProgress?.(`${lead}获取反重力版本`);
-        const manifest = await fetchManifest({ proxy: options.proxy, noProxy: options.noProxy });
+        const manifest = await fetchManifest({ proxy: options.proxy, noProxy: options.noProxy, signal: options.signal });
+        if (options.signal?.aborted) {
+            throw createAbortError();
+        }
         options.onProgress?.(`${lead}下载反重力 ${manifest.version}`);
         await fs.mkdir(path.dirname(binary), { recursive: true });
         const staging = `${binary}.download`;
         await downloadVerified(manifest.url, staging, manifest.sha512, {
             proxy: options.proxy,
             noProxy: options.noProxy,
+            signal: options.signal,
             onProgress: (received, total) => {
                 const percent = total ? ` ${Math.min(100, Math.round((received / total) * 100))}%` : "";
                 options.onProgress?.(`${lead}下载反重力 ${manifest.version}${percent}`);
             },
         });
         try {
+            if (options.signal?.aborted) {
+                throw createAbortError();
+            }
             if (await isGzip(staging)) {
                 const extracted = await extractBinary(staging, path.dirname(binary));
                 await replaceFile(extracted, binary);
@@ -73,6 +98,9 @@ export class AgyRuntime {
             await fs.writeFile(versionFile, manifest.version, "utf8");
         } catch (error) {
             await fs.rm(staging, { force: true });
+            if (isAbortError(error)) {
+                throw error;
+            }
             throw new Error(errorMessage(error));
         }
         this.log(`已安装反重力 ${manifest.version}：${binary}`);
@@ -85,13 +113,22 @@ export class AgyRuntime {
 }
 
 async function extractBinary(archive: string, directory: string): Promise<string> {
-    await run(process.platform === "win32" ? "tar.exe" : "tar", ["-xzf", archive, "-C", directory]);
-    const names = await fs.readdir(directory);
-    const found = names.find((name) => name === "agy" || name === "agy.exe" || name === "antigravity");
-    if (!found) {
-        throw new Error("安装包中没有找到反重力可执行文件");
+    const extractDir = path.join(directory, ".extract");
+    await fs.rm(extractDir, { recursive: true, force: true });
+    await fs.mkdir(extractDir, { recursive: true });
+    try {
+        await run(process.platform === "win32" ? "tar.exe" : "tar", ["-xzf", archive, "-C", extractDir]);
+        const names = await fs.readdir(extractDir);
+        const found = names.find((name) => name === "agy" || name === "agy.exe" || name === "antigravity");
+        if (!found) {
+            throw new Error("安装包中没有找到反重力可执行文件");
+        }
+        const stagedOut = path.join(directory, `${found}.new`);
+        await replaceFile(path.join(extractDir, found), stagedOut);
+        return stagedOut;
+    } finally {
+        await fs.rm(extractDir, { recursive: true, force: true });
     }
-    return path.join(directory, found);
 }
 
 function run(command: string, args: string[]): Promise<void> {
@@ -127,12 +164,28 @@ async function replaceFile(from: string, to: string): Promise<void> {
     if (path.resolve(from) === path.resolve(to)) {
         return;
     }
-    await fs.rm(to, { force: true });
-    try {
-        await fs.rename(from, to);
-    } catch {
-        await fs.copyFile(from, to);
-        await fs.rm(from, { force: true });
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+        try {
+            await fs.rm(to, { force: true });
+            try {
+                await fs.rename(from, to);
+            } catch {
+                await fs.copyFile(from, to);
+                await fs.rm(from, { force: true });
+            }
+            return;
+        } catch (error) {
+            lastError = error;
+            const code = error && typeof error === "object" && "code" in error ? String((error as { code?: unknown }).code) : "";
+            if (attempt === 5 || (code !== "EPERM" && code !== "EBUSY" && code !== "EACCES")) {
+                throw error;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 150));
+        }
+    }
+    if (lastError) {
+        throw lastError;
     }
 }
 

@@ -7,6 +7,8 @@ import { isAuthError, RpcError } from "./acp/connection";
 import { FrameDecoder } from "./acp/framer";
 import { flattenOptions, mergeTokenUsage, readAntigravityTier, readPromptUsage } from "./acp/content";
 import { buildElicitationResponse, parseElicitationRequest } from "./acp/elicitation";
+import { createAbortError, downloadVerified, fetchManifest, isAbortError } from "./agent/download";
+import { AgyRuntime } from "./agent/runtime";
 import { parseCreditsCommandOutput, parseUsageCommandOutput } from "./agent/quota";
 import { displayLineRange, formatAttachedPrompt } from "./chat/prompt";
 import { ChatStore } from "./chat/store";
@@ -575,4 +577,50 @@ test("isAuthError distinguishes real authentication errors from transport/timeou
     assert.equal(isAuthError(new RpcError(-32000, "proxyconnect tcp: connection refused")), false);
     assert.equal(isAuthError(new RpcError(-32000, "context deadline exceeded")), false);
     assert.equal(isAuthError(new RpcError(-32603, "internal error")), false);
+});
+
+test("download abort helpers and pre-aborted signals cancel immediately", async () => {
+    assert.equal(isAbortError(createAbortError()), true);
+    assert.equal(isAbortError(new Error("other")), false);
+    assert.equal(normalizeProxy("socks5://127.0.0.1:1080"), "socks5://127.0.0.1:1080");
+    assert.equal(normalizeProxy("127.0.0.1:10000"), "http://127.0.0.1:10000");
+
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(
+        () => fetchManifest({ signal: controller.signal }),
+        (error: unknown) => isAbortError(error),
+    );
+    await assert.rejects(
+        () => downloadVerified("https://example.com/agy.tar.gz", path.join(os.tmpdir(), "magy-unused.bin"), "00", { signal: controller.signal }),
+        (error: unknown) => isAbortError(error),
+    );
+});
+
+test("AgyRuntime.inspectInstalled detects missing and installed binaries accurately", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "magy-rt-"));
+    try {
+        const runtime = new AgyRuntime(root, () => undefined);
+        assert.equal(await runtime.inspectInstalled(), undefined);
+        assert.equal(await runtime.inspectInstalled(path.join(root, "missing.exe")), undefined);
+
+        const binDir = path.join(root, "bin");
+        fs.mkdirSync(binDir, { recursive: true });
+        const binPath = path.join(binDir, process.platform === "win32" ? "agy.exe" : "agy");
+        fs.writeFileSync(binPath, "stub", "utf8");
+        fs.writeFileSync(path.join(root, "VERSION"), "1.5.18\n", "utf8");
+
+        const detected = await runtime.inspectInstalled();
+        assert.deepEqual(detected, { binary: binPath, version: "1.5.18", managed: true });
+
+        const customPath = path.join(root, "custom-agy");
+        fs.writeFileSync(customPath, "custom", "utf8");
+        assert.deepEqual(await runtime.inspectInstalled(customPath), {
+            binary: customPath,
+            version: "自定义",
+            managed: false,
+        });
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
 });

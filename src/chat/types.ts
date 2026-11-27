@@ -180,7 +180,7 @@ export interface CommandView {
     description: string;
 }
 
-export type LinkStatus = "disconnected" | "connecting" | "ready" | "running" | "auth" | "error";
+export type LinkStatus = "setup" | "disconnected" | "connecting" | "ready" | "running" | "auth" | "error";
 
 export interface SettingsView {
     proxy: string;
@@ -201,6 +201,7 @@ export interface ViewState {
     status: LinkStatus;
     statusText: string;
     runtimeLabel: string;
+    runtimeInstalled: boolean;
     proxy: string;
     proxyUrl: string;
     usageText: string;
@@ -255,6 +256,8 @@ export type WebviewMessage =
     | { type: "openIdeSettings" }
     | { type: "retry" }
     | { type: "install" }
+    | { type: "startSetup"; proxy?: string }
+    | { type: "moveView" }
     | { type: "showLog" }
     | { type: "refreshQuota"; force?: boolean }
     | { type: "openLink"; href: string | null }

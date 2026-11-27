@@ -5,6 +5,7 @@ import { renderHistory, renderHistoryConfirm, renderHistoryItems, type HistoryCo
 import { attachmentIconSvg, iconSvg } from "./icons";
 import { renderMarkdown } from "./markdown";
 import { applyTypography, renderSettings, type SettingsContext } from "./settings";
+import { renderSetup, shouldShowSetup, type SetupContext } from "./setup";
 import { renderUsage, renderUsagePill, type UsageContext } from "./usage";
 import type {
     CodeAttachment,
@@ -24,6 +25,7 @@ const settingsEl = document.getElementById("settings-panel");
 const usageEl = document.getElementById("usage-panel");
 const elicitationEl = document.getElementById("elicitation");
 const permissionEl = document.getElementById("permission") as HTMLElement;
+const setupEl = document.getElementById("setup");
 const authEl = document.getElementById("auth") as HTMLElement;
 const selectorsEl = document.getElementById("selectors") as HTMLElement;
 const slashEl = document.getElementById("slash") as HTMLElement;
@@ -118,6 +120,13 @@ const elicitationCtx: ElicitationContext = {
     ui,
     elicitationEl,
     vscode,
+};
+
+const setupCtx: SetupContext = {
+    ui,
+    setupEl,
+    vscode,
+    setSettingsOpen,
 };
 
 function setHistoryOpen(open: boolean): void {
@@ -557,6 +566,9 @@ function renderMessages(scroll: boolean): void {
     if (composerEl && footer && composerEl.parentElement !== footer) {
         footer.append(composerEl);
     }
+    if (setupEl && setupEl.parentElement === messagesEl && slash && footer) {
+        footer.insertBefore(setupEl, slash);
+    }
     if ((authEl.parentElement === messagesEl || authEl.parentElement === stageStack) && slash && footer) {
         footer.insertBefore(authEl, slash);
     }
@@ -598,6 +610,7 @@ function renderMessages(scroll: boolean): void {
 function syncConnectWait(): void {
     const show = !(ui.state.messages || []).length
         && !ui.pendingSend
+        && !shouldShowSetup(ui.state)
         && authEl.hidden
         && ui.state.status === "connecting";
     if (!show) {
@@ -614,6 +627,44 @@ function syncConnectWait(): void {
     messagesEl.classList.add("waiting");
     if (connectWaitEl.parentElement !== messagesEl) {
         messagesEl.replaceChildren(connectWaitEl);
+    }
+}
+
+function placeSetup(setupShown: boolean): void {
+    const footer = document.querySelector("footer");
+    const fullScreen = setupShown && !(ui.state.messages || []).length;
+    messagesEl.classList.toggle("setup-stage", fullScreen);
+    if (!setupShown || !setupEl) {
+        if (setupEl && footer && setupEl.parentElement !== footer) {
+            footer.insertBefore(setupEl, authEl);
+        }
+        if (composerEl) {
+            composerEl.hidden = false;
+        }
+        return;
+    }
+    if (fullScreen) {
+        emptyEl.remove();
+        if (connectWaitEl.parentElement) {
+            connectWaitEl.remove();
+        }
+        messagesEl.classList.remove("waiting");
+        if (usagePillEl) {
+            usagePillEl.hidden = true;
+        }
+        if (composerEl) {
+            composerEl.hidden = true;
+        }
+        if (setupEl.parentElement !== messagesEl) {
+            messagesEl.replaceChildren(setupEl);
+        }
+        return;
+    }
+    if (composerEl) {
+        composerEl.hidden = false;
+        if (footer && composerEl.parentElement === footer && setupEl.parentElement !== footer) {
+            footer.insertBefore(setupEl, composerEl);
+        }
     }
 }
 
@@ -1163,9 +1214,17 @@ function renderChrome(): void {
     renderSettings(settingsCtx, false);
     renderElicitation(elicitationCtx);
     renderPermission();
-    renderAuth();
+    const setupShown = renderSetup(setupCtx);
+    placeSetup(setupShown);
+    if (setupShown) {
+        ui.proxyMenu = false;
+        authEl.hidden = true;
+        authEl.replaceChildren();
+    } else {
+        renderAuth();
+    }
     syncConnectWait();
-    const isGate = !(ui.state.messages || []).length && !authEl.hidden;
+    const isGate = !(ui.state.messages || []).length && (!authEl.hidden || setupShown);
     renderUsage(usageCtx);
     renderUsagePill(usagePillEl, ui, isGate);
     renderSelectors();
