@@ -1,5 +1,6 @@
 import { inferToolFileTarget, normalizeToolMeta, renderDiffs, unwrapJsonOutput } from "./diff";
 import { initDragAndDrop } from "./dnd";
+import { renderElicitation, type ElicitationContext } from "./elicitation";
 import { renderHistory, renderHistoryConfirm, renderHistoryItems, type HistoryContext } from "./history";
 import { attachmentIconSvg, iconSvg } from "./icons";
 import { renderMarkdown } from "./markdown";
@@ -21,6 +22,7 @@ const messagesEl = document.getElementById("messages") as HTMLElement;
 const historyEl = document.getElementById("history-panel") as HTMLElement;
 const settingsEl = document.getElementById("settings-panel");
 const usageEl = document.getElementById("usage-panel");
+const elicitationEl = document.getElementById("elicitation");
 const permissionEl = document.getElementById("permission") as HTMLElement;
 const authEl = document.getElementById("auth") as HTMLElement;
 const selectorsEl = document.getElementById("selectors") as HTMLElement;
@@ -59,6 +61,7 @@ const ui: UiState = {
     slashMoved: false,
     slashMatches: [],
     openPicker: null,
+    elicitationId: "",
     historyQuery: "",
     historyIndex: -1,
     historyConfirmId: "",
@@ -74,6 +77,16 @@ const stageStack = document.createElement("div");
 stageStack.id = "stage-stack";
 const emptyEl = document.createElement("p");
 emptyEl.className = "empty";
+const connectWaitEl = document.createElement("div");
+connectWaitEl.className = "connect-wait";
+connectWaitEl.setAttribute("role", "status");
+const connectWaitDotEl = document.createElement("span");
+connectWaitDotEl.className = "connect-wait-dot";
+connectWaitDotEl.setAttribute("aria-hidden", "true");
+const connectWaitTextEl = document.createElement("span");
+connectWaitTextEl.className = "connect-wait-text";
+connectWaitTextEl.textContent = "等待连接";
+connectWaitEl.append(connectWaitDotEl, connectWaitTextEl);
 
 const historyCtx: HistoryContext = {
     ui,
@@ -99,6 +112,12 @@ const usageCtx: UsageContext = {
     usagePillEl,
     vscode,
     setUsageOpen,
+};
+
+const elicitationCtx: ElicitationContext = {
+    ui,
+    elicitationEl,
+    vscode,
 };
 
 function setHistoryOpen(open: boolean): void {
@@ -439,6 +458,7 @@ window.addEventListener("message", (event: MessageEvent<HostMessage>) => {
     }
 });
 
+renderChrome();
 vscode.postMessage({ type: "ready" });
 
 function onSendButton(): void {
@@ -463,6 +483,7 @@ function sendComposer(): void {
     ui.slashDismissed = false;
     resizeInput();
     renderSlash();
+    syncConnectWait();
     syncSend();
     vscode.postMessage({ type: "send", text });
 }
@@ -506,7 +527,7 @@ function upsertMessage(message: StoredMessage): void {
         if (existing) {
             existing.replaceWith(node);
         } else {
-            const empty = messagesEl.querySelector(".empty");
+            const empty = messagesEl.querySelector(".empty, .connect-wait");
             if (empty) {
                 empty.remove();
             }
@@ -519,6 +540,7 @@ function upsertMessage(message: StoredMessage): void {
         }
     }
     placeAuth();
+    syncConnectWait();
     syncLivePulse();
     if (stick) {
         messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -554,7 +576,7 @@ function renderMessages(scroll: boolean): void {
     }
     messagesEl.replaceChildren();
     const emptyThread = !ui.state.messages.length;
-    const prelude = ui.state.status === "auth" || (emptyThread && (ui.state.status === "connecting" || ui.state.status === "disconnected" || ui.state.status === "error"));
+    const prelude = ui.state.status === "auth";
     messagesEl.classList.toggle("stage", emptyThread && prelude);
     if (!emptyThread) {
         let prev: StoredMessage | null = null;
@@ -563,6 +585,7 @@ function renderMessages(scroll: boolean): void {
             prev = message;
         }
     }
+    syncConnectWait();
     syncLivePulse();
     if (stick) {
         messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -570,6 +593,28 @@ function renderMessages(scroll: boolean): void {
         messagesEl.scrollTop = previousTop;
     }
     syncScrollBottom();
+}
+
+function syncConnectWait(): void {
+    const show = !(ui.state.messages || []).length
+        && !ui.pendingSend
+        && authEl.hidden
+        && ui.state.status === "connecting";
+    if (!show) {
+        if (connectWaitEl.parentElement) {
+            connectWaitEl.remove();
+        }
+        messagesEl.classList.remove("waiting");
+        return;
+    }
+    const label = statusText() || "等待连接";
+    if (connectWaitTextEl.textContent !== label) {
+        connectWaitTextEl.textContent = label;
+    }
+    messagesEl.classList.add("waiting");
+    if (connectWaitEl.parentElement !== messagesEl) {
+        messagesEl.replaceChildren(connectWaitEl);
+    }
 }
 
 function syncEmptyHint(): void {
@@ -586,6 +631,10 @@ function syncEmptyHint(): void {
     }
     emptyEl.remove();
     if (!composerEl || composerEl.classList.contains("locked")) {
+        return;
+    }
+    if (ui.state.status === "connecting" && !(ui.state.messages || []).length && authEl.hidden) {
+        inputEl.placeholder = "等待连接中，可直接输入任务";
         return;
     }
     inputEl.placeholder = show
@@ -626,6 +675,9 @@ function placeAuth(): void {
     }
     if (composerEl && footer && composerEl.parentElement === footer) {
         footer.insertBefore(authEl, composerEl);
+        if (elicitationEl) {
+            footer.insertBefore(elicitationEl, composerEl);
+        }
         footer.insertBefore(permissionEl, composerEl);
         footer.insertBefore(slashEl, composerEl);
         if (statusRowEl) {
@@ -1109,8 +1161,10 @@ function renderChrome(): void {
     renderBarTitle();
     renderHistory(historyCtx);
     renderSettings(settingsCtx, false);
+    renderElicitation(elicitationCtx);
     renderPermission();
     renderAuth();
+    syncConnectWait();
     const isGate = !(ui.state.messages || []).length && !authEl.hidden;
     renderUsage(usageCtx);
     renderUsagePill(usagePillEl, ui, isGate);
@@ -1235,10 +1289,9 @@ function renderAuth(): void {
     if (composerEl && composerEl.parentElement === authEl) {
         composerEl.remove();
     }
-    const emptyThread = !(ui.state.messages || []).length;
-    const status = ui.state.status;
-    const show = status === "auth" || (emptyThread && (status === "connecting" || status === "disconnected" || status === "error"));
+    const show = ui.state.status === "auth";
     if (!show) {
+        ui.proxyMenu = false;
         authEl.hidden = true;
         authEl.replaceChildren();
         placeAuth();

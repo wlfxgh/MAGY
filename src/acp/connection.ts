@@ -8,12 +8,18 @@ export class RpcError extends Error {
     }
 }
 
+const AUTH_MESSAGE_RE = /authentication required|auth_required|unauthenticated|not logged in|login required|sign in required|需要登录|请登录/i;
+const NON_AUTH_MESSAGE_RE = /timeout|timed out|deadline exceeded|econn|enotfound|eai_again|etimedout|proxy|connectex|connection refused|network|tls|certificate|socket|eof|closed|rate limit|quota|resource exhausted|not found|invalid params/i;
+
 export function isAuthError(error: unknown): boolean {
-    if (error instanceof RpcError && (error.code === -32000 || error.code === -32001)) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (AUTH_MESSAGE_RE.test(message)) {
         return true;
     }
-    const message = error instanceof Error ? error.message : String(error);
-    return /authentication required|auth_required|需要登录|请登录/i.test(message);
+    if (error instanceof RpcError && (error.code === -32000 || error.code === -32001)) {
+        return !NON_AUTH_MESSAGE_RE.test(message);
+    }
+    return false;
 }
 
 interface Pending {
@@ -163,7 +169,9 @@ export class AcpConnection {
         this.pending.delete(Number(record.id));
         if (record.error) {
             const error = asRecord(record.error);
-            pending.reject(new RpcError(Number(error.code ?? -32000), String(error.message ?? "ACP 请求失败"), error.data));
+            const rawCode = error.code;
+            const code = typeof rawCode === "number" && Number.isFinite(rawCode) ? rawCode : -32603;
+            pending.reject(new RpcError(code, String(error.message ?? "ACP 请求失败"), error.data));
             return;
         }
         pending.resolve(record.result);

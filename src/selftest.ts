@@ -3,8 +3,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
+import { isAuthError, RpcError } from "./acp/connection";
 import { FrameDecoder } from "./acp/framer";
 import { flattenOptions, mergeTokenUsage, readAntigravityTier, readPromptUsage } from "./acp/content";
+import { buildElicitationResponse, parseElicitationRequest } from "./acp/elicitation";
 import { parseCreditsCommandOutput, parseUsageCommandOutput } from "./agent/quota";
 import { displayLineRange, formatAttachedPrompt } from "./chat/prompt";
 import { ChatStore } from "./chat/store";
@@ -454,4 +456,123 @@ test("cursor discover and load use range queries, composerHeaders and worker_thr
         scanner.dispose();
         fs.rmSync(root, { recursive: true, force: true });
     }
+});
+
+test("elicitation parser pairs _other fields, handles enums, and builds valid ACP responses", () => {
+    const view = parseElicitationRequest("req-1", {
+        mode: "form",
+        message: "The agent has 2 questions.",
+        requestedSchema: {
+            type: "object",
+            required: ["q1", "confirm"],
+            properties: {
+                q1: {
+                    type: "string",
+                    title: "Preferred DB?",
+                    oneOf: [
+                        { const: "1", title: "(Recommended) PostgreSQL" },
+                        { const: "2", title: "SQLite" },
+                    ],
+                },
+                q1_other: {
+                    type: "string",
+                    title: "Other",
+                    description: "Optional free-form answer to: Preferred DB?",
+                },
+                q2: {
+                    type: "array",
+                    title: "Features?",
+                    items: {
+                        anyOf: [
+                            { const: "a", title: "Auth" },
+                            { const: "b", title: "Cache（推荐）" },
+                        ],
+                    },
+                },
+                q2_other: {
+                    type: "string",
+                    title: "Other",
+                },
+                mode_enum: {
+                    type: "string",
+                    title: "Mode",
+                    enum: ["fast", "safe"],
+                    enumNames: ["Fast Mode", "Safe Mode"],
+                },
+                port: {
+                    type: "integer",
+                    title: "Port",
+                    minimum: 1,
+                    maximum: 65535,
+                    default: 8080,
+                },
+                confirm: {
+                    type: "boolean",
+                    title: "Confirm changes",
+                    default: true,
+                },
+            },
+        },
+    });
+
+    assert.equal(view.title, "请回答以下问题");
+    assert.equal(view.message, "共 5 个问题");
+    assert.equal(view.fields.length, 5);
+    assert.equal(view.fields[0].kind, "single");
+    assert.equal(view.fields[0].otherKey, "q1_other");
+    assert.equal(view.fields[0].required, true);
+    assert.deepEqual(view.fields[0].options?.[0], { value: "1", label: "PostgreSQL", recommended: true });
+    assert.equal(view.fields[1].kind, "multi");
+    assert.equal(view.fields[1].otherKey, "q2_other");
+    assert.deepEqual(view.fields[1].options?.[1], { value: "b", label: "Cache", recommended: true });
+    assert.deepEqual(view.fields[2].options, [
+        { value: "fast", label: "Fast Mode" },
+        { value: "safe", label: "Safe Mode" },
+    ]);
+    assert.equal(view.fields[3].kind, "number");
+    assert.equal(view.fields[3].integer, true);
+    assert.equal(view.fields[4].kind, "boolean");
+
+    // When only q1_other is filled, q1 should be omitted cleanly while keeping q1_other
+    const freeformResp = buildElicitationResponse(view, "accept", {
+        q1: "",
+        q1_other: "DuckDB",
+        q2: ["a"],
+        q2_other: "Tracing",
+        mode_enum: "safe",
+        port: "3000.9",
+        confirm: false,
+    });
+    assert.deepEqual(freeformResp, {
+        action: "accept",
+        content: {
+            q1_other: "DuckDB",
+            q2: ["a"],
+            q2_other: "Tracing",
+            mode_enum: "safe",
+            port: 3000,
+            confirm: false,
+        },
+    });
+
+    assert.deepEqual(buildElicitationResponse(view, "decline"), { action: "decline" });
+    assert.deepEqual(buildElicitationResponse(view, "cancel"), { action: "cancel" });
+
+    const urlView = parseElicitationRequest("req-url", {
+        mode: "url",
+        message: "Open browser to authorize",
+        url: "https://example.com/oauth",
+    });
+    assert.equal(urlView.mode, "url");
+    assert.equal(urlView.url, "https://example.com/oauth");
+});
+
+test("isAuthError distinguishes real authentication errors from transport/timeout failures", () => {
+    assert.equal(isAuthError(new RpcError(-32000, "Authentication required")), true);
+    assert.equal(isAuthError(new RpcError(-32000, "")), true);
+    assert.equal(isAuthError(new RpcError(-32001, "auth_required")), true);
+    assert.equal(isAuthError(new Error("You are not logged into Antigravity")), true);
+    assert.equal(isAuthError(new RpcError(-32000, "proxyconnect tcp: connection refused")), false);
+    assert.equal(isAuthError(new RpcError(-32000, "context deadline exceeded")), false);
+    assert.equal(isAuthError(new RpcError(-32603, "internal error")), false);
 });

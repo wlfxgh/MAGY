@@ -394,11 +394,20 @@ export function renderSettings(ctx: SettingsContext, resetInputs: boolean): void
             });
             return btn;
         };
+        const loginBtn = document.createElement("button");
+        loginBtn.type = "button";
+        loginBtn.className = "settings-action-btn wide";
+        loginBtn.textContent = "登录 Google 账号";
+        loginBtn.addEventListener("click", () => {
+            setSettingsOpen(false);
+            vscode.postMessage({ type: "login", methodId: "oauth-personal" });
+        });
         actGrid.append(
             makeActionBtn("安装 / 更新内置版本", "install", true),
             makeActionBtn("设置 Gemini API Key", "setApiKey", true),
             makeActionBtn("查看运行日志", "showLog", false),
             makeActionBtn("重连反重力", "retry", true),
+            loginBtn,
         );
         actGroup.append(actTitle, actGrid);
 

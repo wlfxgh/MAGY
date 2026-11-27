@@ -98,6 +98,8 @@ button:focus-visible, textarea:focus-visible, select:focus-visible {
 .settings-font-value .settings-font-input:focus-visible,
 .settings-input-row input:focus,
 .settings-input-row input:focus-visible,
+#elicitation .elicit-input:focus,
+#elicitation .elicit-input:focus-visible,
 #auth .choices .proxy-edit input:focus,
 #auth .choices .proxy-edit input:focus-visible {
   outline: none !important;
@@ -575,6 +577,10 @@ button.danger {
   background: color-mix(in srgb, var(--ink) 8%, transparent);
 }
 
+.settings-action-btn.wide {
+  grid-column: 1 / -1;
+}
+
 .history-shell {
   display: flex;
   flex-direction: column;
@@ -1002,6 +1008,38 @@ button.danger {
   justify-content: center;
   gap: 14px;
   padding: 28px 12px;
+}
+
+#messages.waiting {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 12px;
+}
+
+.connect-wait {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+  user-select: none;
+}
+
+.connect-wait-dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--vscode-button-background);
+  animation: magy-pulse-ring 1.8s ease-in-out infinite;
+}
+
+.connect-wait-text {
+  color: var(--muted);
 }
 
 #messages.stage:has(> #stage-stack) {
@@ -2491,6 +2529,7 @@ footer:not(:has(.composer)) {
   color: var(--muted);
 }
 
+footer:has(#elicitation:not([hidden])) #send:not(.stop),
 footer:has(#permission:not([hidden])) #send:not(.stop),
 footer:has(#auth:not([hidden])) #send:not(.stop) {
   border-color: color-mix(in srgb, var(--ink) 22%, transparent);
@@ -2499,22 +2538,377 @@ footer:has(#auth:not([hidden])) #send:not(.stop) {
   font-weight: 500;
 }
 
+footer:has(#elicitation:not([hidden])) #send:not(.stop):hover,
 footer:has(#permission:not([hidden])) #send:not(.stop):hover,
 footer:has(#auth:not([hidden])) #send:not(.stop):hover {
   background: color-mix(in srgb, var(--ink) 8%, transparent);
 }
 
+body:has(#elicitation:not([hidden])) #messages,
 body:has(#permission:not([hidden])) #messages {
   min-height: 40px;
   padding-top: 8px;
 }
 
+footer:has(#elicitation:not([hidden])) textarea,
 footer:has(#permission:not([hidden])) textarea {
   min-height: 36px;
 }
 
+footer:has(#elicitation:not([hidden])) #slash,
 footer:has(#permission:not([hidden])) #slash {
   max-height: 40px;
+}
+
+#elicitation {
+  padding: 0;
+  overflow: hidden;
+  border-color: var(--border);
+  box-shadow: 0 4px 16px color-mix(in srgb, #000000 14%, transparent);
+  animation: magy-pop 0.16s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.elicit-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 12px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.elicit-head-left {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+#elicitation .elicit-title {
+  display: inline;
+  margin: 0;
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.elicit-sub {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.elicit-progress {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  color: var(--muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.elicit-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: min(44vh, 320px);
+  overflow-y: auto;
+  padding: 10px 12px;
+}
+
+.elicit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.elicit-q-head {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.elicit-q-title {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.elicit-tag {
+  padding: 0 5px;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.elicit-req {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.elicit-q-desc {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.elicit-options {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.elicit-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  height: auto;
+  min-height: 28px;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--canvas);
+  color: var(--ink);
+  text-align: left;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.elicit-opt:hover {
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--ink) 5%, var(--canvas));
+}
+
+.elicit-opt.selected {
+  border-color: var(--vscode-focusBorder);
+  background: color-mix(in srgb, var(--vscode-focusBorder) 10%, var(--canvas));
+}
+
+.elicit-radio,
+.elicit-check {
+  position: relative;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
+  border: 1.5px solid color-mix(in srgb, var(--ink) 34%, transparent);
+  transition: border-color 0.14s ease, background-color 0.14s ease;
+}
+
+.elicit-radio {
+  border-radius: 50%;
+}
+
+.elicit-check {
+  border-radius: 3px;
+}
+
+.elicit-opt.selected .elicit-radio {
+  border-color: var(--vscode-focusBorder);
+}
+
+.elicit-opt.selected .elicit-radio::after {
+  content: "";
+  position: absolute;
+  inset: 2.5px;
+  border-radius: 50%;
+  background: var(--vscode-focusBorder);
+}
+
+.elicit-opt.selected .elicit-check {
+  border-color: var(--vscode-focusBorder);
+  background: var(--vscode-focusBorder);
+}
+
+.elicit-opt.selected .elicit-check::after {
+  content: "";
+  position: absolute;
+  left: 3.5px;
+  top: 1px;
+  width: 4px;
+  height: 7px;
+  border-right: 1.8px solid var(--accent-ink);
+  border-bottom: 1.8px solid var(--accent-ink);
+  transform: rotate(42deg);
+}
+
+.elicit-opt-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.elicit-rec {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--vscode-textLink-foreground);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 17px;
+}
+
+.elicit-input {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  outline: none;
+  box-shadow: none;
+  background: color-mix(in srgb, var(--ink) 3%, var(--canvas));
+  color: var(--ink);
+  font: inherit;
+  font-size: 11.5px;
+}
+
+#elicitation .elicit-input:focus,
+#elicitation .elicit-input:focus-visible {
+  border-color: var(--vscode-focusBorder);
+  background: var(--canvas);
+}
+
+.elicit-input::placeholder {
+  color: var(--muted);
+}
+
+.elicit-toggle {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 2px 0;
+  cursor: pointer;
+}
+
+.elicit-toggle-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.elicit-toggle input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.elicit-toggle input:checked + .settings-switch {
+  background: var(--accent);
+}
+
+.elicit-toggle input:checked + .settings-switch::after {
+  transform: translateX(14px);
+}
+
+.elicit-url-note {
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.elicit-url-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.elicit-url-text {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-family: var(--vscode-editor-font-family);
+  font-size: 11px;
+}
+
+.elicit-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--ink) 2%, var(--surface));
+}
+
+.elicit-error {
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.elicit-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.elicit-btn {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 4px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--ink) 22%, transparent);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink);
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.elicit-btn svg {
+  width: 12px;
+  height: 12px;
+}
+
+.elicit-btn.ghost {
+  border-color: transparent;
+  color: var(--muted);
+}
+
+.elicit-btn.ghost:hover {
+  color: var(--ink);
+}
+
+.elicit-btn.primary {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.elicit-btn.primary:hover {
+  background: var(--accent);
+  filter: brightness(1.08);
+}
+
+.elicit-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
 }
 
 #auth .choices {
@@ -3275,6 +3669,10 @@ textarea::placeholder {
   background: var(--vscode-button-background);
 }
 
+.status[data-state="connecting"]::before {
+  animation: magy-pulse-soft 1.6s ease-in-out infinite;
+}
+
 .status[data-state="error"]::before {
   background: var(--vscode-errorForeground);
 }
@@ -3745,7 +4143,7 @@ footer > .status::before,
   height: 14px;
 }
 
-#messages, .history-list, .settings-body, .usage-body, #stage-stack, pre, .table-wrap, .diff-code {
+#messages, .history-list, .settings-body, .usage-body, .elicit-body, #stage-stack, pre, .table-wrap, .diff-code {
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--ink) 22%, transparent) transparent;
 }
@@ -3754,6 +4152,7 @@ footer > .status::before,
 .history-list::-webkit-scrollbar,
 .settings-body::-webkit-scrollbar,
 .usage-body::-webkit-scrollbar,
+.elicit-body::-webkit-scrollbar,
 #stage-stack::-webkit-scrollbar,
 pre::-webkit-scrollbar,
 .table-wrap::-webkit-scrollbar,
@@ -3766,6 +4165,7 @@ pre::-webkit-scrollbar,
 .history-list::-webkit-scrollbar-track,
 .settings-body::-webkit-scrollbar-track,
 .usage-body::-webkit-scrollbar-track,
+.elicit-body::-webkit-scrollbar-track,
 #stage-stack::-webkit-scrollbar-track,
 pre::-webkit-scrollbar-track,
 .table-wrap::-webkit-scrollbar-track,
@@ -3777,6 +4177,7 @@ pre::-webkit-scrollbar-track,
 .history-list::-webkit-scrollbar-thumb,
 .settings-body::-webkit-scrollbar-thumb,
 .usage-body::-webkit-scrollbar-thumb,
+.elicit-body::-webkit-scrollbar-thumb,
 #stage-stack::-webkit-scrollbar-thumb,
 pre::-webkit-scrollbar-thumb,
 .table-wrap::-webkit-scrollbar-thumb,
@@ -3789,6 +4190,7 @@ pre::-webkit-scrollbar-thumb,
 .history-list::-webkit-scrollbar-thumb:hover,
 .settings-body::-webkit-scrollbar-thumb:hover,
 .usage-body::-webkit-scrollbar-thumb:hover,
+.elicit-body::-webkit-scrollbar-thumb:hover,
 #stage-stack::-webkit-scrollbar-thumb:hover,
 pre::-webkit-scrollbar-thumb:hover,
 .table-wrap::-webkit-scrollbar-thumb:hover,
@@ -3800,6 +4202,7 @@ pre::-webkit-scrollbar-thumb:hover,
 .history-list::-webkit-scrollbar-button,
 .settings-body::-webkit-scrollbar-button,
 .usage-body::-webkit-scrollbar-button,
+.elicit-body::-webkit-scrollbar-button,
 #stage-stack::-webkit-scrollbar-button,
 pre::-webkit-scrollbar-button,
 .table-wrap::-webkit-scrollbar-button,

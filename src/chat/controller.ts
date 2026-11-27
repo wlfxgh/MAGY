@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import * as vscode from "vscode";
 import { AcpConnection, isAuthError } from "../acp/connection";
 import { contentText, emptyTokenUsage, extractDiffs, flattenOptions, mergeTokenUsage, readAntigravityTier, readAuthMethods, readPromptUsage, readStopReason } from "../acp/content";
+import { buildElicitationResponse, parseElicitationRequest } from "../acp/elicitation";
 import { ClientTools } from "../acp/tools";
 import { fetchCreditsQuota, fetchUsageQuota } from "../agent/quota";
 import { AgyRuntime } from "../agent/runtime";
@@ -14,13 +15,14 @@ import { agentEnv, normalizeFontSize, readSettings, workspaceCwd, workspacePaths
 import { asRecord, clip, countDiffLines, errorMessage, normalizeProxy, redactProxy, resolveProxy, withNetworkHint } from "../util";
 import { displayLineRange, formatAttachedPrompt } from "./prompt";
 import { blankMessage, ChatStore } from "./store";
-import type { AccountTierView, AuthMethodView, ChatRecord, ChatTokenStats, CodeAttachment, CommandView, ConfigOptionView, HostMessage, LinkStatus, ModeView, PermissionView, QuotaBucketView, QuotaGroupView, QuotaStateView, StoredMessage, TokenUsage, ToolDiff, ViewState } from "./types";
+import type { AccountTierView, AuthMethodView, ChatRecord, ChatTokenStats, CodeAttachment, CommandView, ConfigOptionView, ElicitationAction, ElicitationView, HostMessage, LinkStatus, ModeView, PermissionView, QuotaBucketView, QuotaGroupView, QuotaStateView, StoredMessage, TokenUsage, ToolDiff, ViewState } from "./types";
 
 const API_KEY_SECRET = "magy.geminiApiKey";
 const LEGACY_API_KEY_SECRET = "mine-agy.geminiApiKey";
 const PREFERRED_MODE_KEY = "magy.preferredMode";
 const PREFERRED_OPTIONS_KEY = "magy.preferredOptions";
 const CACHED_QUOTA_KEY = "magy.cachedQuota";
+const AUTH_CONFIRMED_KEY = "magy.authConfirmed";
 const SKIP_PERMISSIONS_MODE_ID = "bypass-permissions";
 const UI_LIMIT = 300;
 const BUILTIN_USAGE_COMMAND: CommandView = { name: "usage", description: "查看账号剩余用量与当前对话 Token 统计" };
@@ -36,6 +38,11 @@ interface CursorPickItem extends vscode.QuickPickItem {
     summary?: CursorConversationSummary;
     toggleAll?: boolean;
     toggleWorkspace?: boolean;
+}
+
+interface PendingElicitation {
+    view: ElicitationView;
+    resolve: (result: unknown) => void;
 }
 
 interface Outgoing {
@@ -55,8 +62,10 @@ export class ChatController implements vscode.Disposable {
     private activeSessionId: string | undefined;
     private initialized = false;
     private protocolVersion = 1;
-    private status: LinkStatus = "disconnected";
-    private statusText = "未连接";
+    private status: LinkStatus = "connecting";
+    private statusText = "等待连接";
+    private hasAuthenticatedInSession = false;
+    private hasEverAuthenticated = false;
     private runtimeLabel = "未安装";
     private runtimeBinary = "";
     private quota: QuotaStateView = { loading: false, groups: [] };
@@ -84,6 +93,7 @@ export class ChatController implements vscode.Disposable {
     private commands: CommandView[] = [];
     private permission: PermissionView | undefined;
     private readonly permissionWaiters = new Map<string, (optionId: string | null) => void>();
+    private readonly elicitationQueue: PendingElicitation[] = [];
     private turnToken = "";
     private recordedUsageTurnToken = "";
     private connectionPromise: Promise<void> | undefined;
@@ -102,6 +112,7 @@ export class ChatController implements vscode.Disposable {
     ) {
         this.settings = readSettings();
         this.quota = this.loadCachedQuota();
+        this.hasEverAuthenticated = Boolean(this.context.globalState.get<boolean>(AUTH_CONFIRMED_KEY));
         this.tools = new ClientTools(() => {
             const folders = workspacePaths();
             return folders.length ? folders : [workspaceCwd()];
@@ -272,16 +283,26 @@ export class ChatController implements vscode.Disposable {
     }
 
     onSettingsChanged(): void {
+        const prev = this.settings;
         const prevSkip = this.isSkipPermissions();
-        const prevCursorDir = this.settings.cursorDataDir;
         this.settings = readSettings();
-        if (prevCursorDir !== this.settings.cursorDataDir) {
+        if (prev.cursorDataDir !== this.settings.cursorDataDir) {
             this.cursorCache = undefined;
             this.scheduleCursorWarmup(600);
         }
         const nextSkip = this.isSkipPermissions();
         if (nextSkip) {
             this.approvePendingPermissions();
+        }
+        const processChanged = prev.proxy !== this.settings.proxy
+            || prev.noProxy !== this.settings.noProxy
+            || prev.binaryPath !== this.settings.binaryPath
+            || prev.sandbox !== this.settings.sandbox
+            || prev.dangerouslySkipPermissions !== this.settings.dangerouslySkipPermissions
+            || prev.extraArgs.join("\0") !== this.settings.extraArgs.join("\0");
+        if (!processChanged) {
+            this.pushStatus();
+            return;
         }
         if (this.busy) {
             this.restartAfterTurn = true;
@@ -373,6 +394,7 @@ export class ChatController implements vscode.Disposable {
             waiter(null);
         }
         this.permissionWaiters.clear();
+        this.cancelAllElicitations();
         this.stopProcess();
     }
 
@@ -419,6 +441,14 @@ export class ChatController implements vscode.Disposable {
                 case "permission":
                     this.resolvePermission(String(record.requestId ?? ""), typeof record.optionId === "string" ? record.optionId : null);
                     return;
+                case "elicitation": {
+                    const actionRaw = record.action;
+                    const action: ElicitationAction = actionRaw === "accept" || actionRaw === "decline"
+                        ? actionRaw
+                        : "cancel";
+                    this.resolveElicitation(String(record.requestId ?? ""), action, asRecord(record.content));
+                    return;
+                }
                 case "login":
                     await this.login(String(record.methodId ?? ""));
                     return;
@@ -715,10 +745,7 @@ export class ChatController implements vscode.Disposable {
                 return;
             }
             if (isAuthError(error)) {
-                this.status = "auth";
-                this.statusText = "需要登录反重力";
-                this.ensureFallbackAuth();
-                this.pushStatus();
+                this.handleAuthFailure();
                 return;
             }
             this.fail(withNetworkHint(error));
@@ -775,6 +802,7 @@ export class ChatController implements vscode.Disposable {
         }
         this.permissionWaiters.clear();
         this.permission = undefined;
+        this.cancelAllElicitations();
         this.queue.length = 0;
         this.statusText = "正在取消";
         this.pushStatus();
@@ -1072,8 +1100,9 @@ export class ChatController implements vscode.Disposable {
     }
 
     private async startConnection(): Promise<void> {
+        const connectLabel = this.hasAuthenticatedInSession ? "正在重新连接" : "等待连接";
         this.status = "connecting";
-        this.statusText = "正在准备反重力";
+        this.statusText = connectLabel;
         this.pushStatus();
         const network = this.network();
         const info = await this.runtime.ensure({
@@ -1120,13 +1149,14 @@ export class ChatController implements vscode.Disposable {
             }
         });
         connection.setRequestHandler((method, params) => this.onAgentRequest(method, params));
-        this.statusText = "正在连接";
+        this.statusText = connectLabel;
         this.pushStatus();
         const init = await connection.request("initialize", {
             protocolVersion: 1,
             clientCapabilities: {
                 fs: { readTextFile: true, writeTextFile: true },
                 terminal: true,
+                elicitation: { form: {} },
             },
             clientInfo: { name: "magy", title: "MAGY", version: String(this.context.extension.packageJSON.version ?? "0.2.0") },
         }, 30000);
@@ -1157,13 +1187,27 @@ export class ChatController implements vscode.Disposable {
         const cwd = workspaceCwd();
         const isCurrentTarget = (): boolean => !this.deletedIds.has(chat.id)
             && (this.active?.id === chat.id || this.streamingChatId === chat.id);
+        const runWithAuthRetry = async <T>(fn: () => Promise<T>): Promise<T> => {
+            try {
+                return await fn();
+            } catch (error) {
+                if (!isAuthError(error) || !(this.hasAuthenticatedInSession || this.hasEverAuthenticated) || this.disposed || this.connection !== connection) {
+                    throw error;
+                }
+                await new Promise<void>((resolve) => setTimeout(resolve, 650));
+                if (this.disposed || this.connection !== connection) {
+                    throw error;
+                }
+                return await fn();
+            }
+        };
         if (chat.acpSessionId) {
             try {
-                const resumed = await connection.request("session/resume", {
+                const resumed = await runWithAuthRetry(() => connection.request("session/resume", {
                     sessionId: chat.acpSessionId,
                     cwd,
                     mcpServers: [],
-                }, 30000);
+                }, 30000));
                 if (!isCurrentTarget()) {
                     return;
                 }
@@ -1173,6 +1217,7 @@ export class ChatController implements vscode.Disposable {
                 if (!isCurrentTarget()) {
                     return;
                 }
+                this.markAuthenticated();
                 this.status = "ready";
                 this.statusText = this.readyLabel();
                 this.pushStatus();
@@ -1180,7 +1225,8 @@ export class ChatController implements vscode.Disposable {
                 return;
             } catch (error) {
                 if (isAuthError(error)) {
-                    throw error;
+                    this.handleAuthFailure();
+                    return;
                 }
                 if (this.deletedIds.has(chat.id)) {
                     return;
@@ -1196,7 +1242,7 @@ export class ChatController implements vscode.Disposable {
             }
         }
         try {
-            const created = await connection.request("session/new", { cwd, mcpServers: [] }, 30000);
+            const created = await runWithAuthRetry(() => connection.request("session/new", { cwd, mcpServers: [] }, 30000));
             const sessionId = String(asRecord(created).sessionId ?? "");
             if (!sessionId) {
                 throw new Error("反重力没有返回会话编号");
@@ -1215,16 +1261,14 @@ export class ChatController implements vscode.Disposable {
             if (!isCurrentTarget()) {
                 return;
             }
+            this.markAuthenticated();
             this.status = "ready";
             this.statusText = this.readyLabel();
             this.pushStatus();
             this.scheduleInitialQuotaWarmup();
         } catch (error) {
             if (isAuthError(error)) {
-                this.status = "auth";
-                this.statusText = "需要登录反重力";
-                this.ensureFallbackAuth();
-                this.pushStatus();
+                this.handleAuthFailure();
                 return;
             }
             throw error;
@@ -1235,7 +1279,40 @@ export class ChatController implements vscode.Disposable {
         if (method === "session/request_permission") {
             return this.askPermission(params);
         }
+        if (method === "elicitation/create") {
+            return this.askElicitation(params);
+        }
         return this.tools.handle(method, params);
+    }
+
+    private askElicitation(params: unknown): Promise<unknown> {
+        const requestId = randomUUID();
+        const view = parseElicitationRequest(requestId, params);
+        void this.focus();
+        return new Promise((resolve) => {
+            this.elicitationQueue.push({ view, resolve });
+            this.pushStatus();
+        });
+    }
+
+    private resolveElicitation(requestId: string, action: ElicitationAction, content?: Record<string, unknown>): void {
+        const index = this.elicitationQueue.findIndex((entry) => entry.view.requestId === requestId);
+        if (index < 0) {
+            return;
+        }
+        const [entry] = this.elicitationQueue.splice(index, 1);
+        this.pushStatus();
+        entry.resolve(buildElicitationResponse(entry.view, action, content));
+    }
+
+    private cancelAllElicitations(): void {
+        if (!this.elicitationQueue.length) {
+            return;
+        }
+        const entries = this.elicitationQueue.splice(0);
+        for (const entry of entries) {
+            entry.resolve({ action: "cancel" });
+        }
     }
 
     private askPermission(params: unknown): Promise<unknown> {
@@ -1835,6 +1912,7 @@ export class ChatController implements vscode.Disposable {
         this.connection = undefined;
         this.initialized = false;
         this.activeSessionId = undefined;
+        this.cancelAllElicitations();
         this.tools.dispose();
         current?.dispose();
     }
@@ -1844,6 +1922,31 @@ export class ChatController implements vscode.Disposable {
             throw new Error("反重力尚未连接");
         }
         return this.connection;
+    }
+
+    private markAuthenticated(): void {
+        this.hasAuthenticatedInSession = true;
+        if (!this.hasEverAuthenticated) {
+            this.hasEverAuthenticated = true;
+            void this.context.globalState.update(AUTH_CONFIRMED_KEY, true);
+        }
+    }
+
+    private handleAuthFailure(): void {
+        if (this.hasAuthenticatedInSession) {
+            this.status = "error";
+            this.statusText = "登录状态暂时异常，请在设置中重连或重新登录";
+            this.pushStatus();
+            return;
+        }
+        if (this.hasEverAuthenticated) {
+            this.hasEverAuthenticated = false;
+            void this.context.globalState.update(AUTH_CONFIRMED_KEY, false);
+        }
+        this.status = "auth";
+        this.statusText = "需要登录反重力";
+        this.ensureFallbackAuth();
+        this.pushStatus();
     }
 
     private ensureFallbackAuth(): void {
@@ -2279,6 +2382,7 @@ export class ChatController implements vscode.Disposable {
             options: this.options,
             authMethods: this.authMethods,
             permission: this.permission,
+            elicitation: this.elicitationQueue[0]?.view,
             commands: withBuiltinCommands(this.commands),
             tokenStats: chat?.tokenStats,
             quota: this.quota,
@@ -2351,6 +2455,7 @@ export class ChatController implements vscode.Disposable {
         this.status = "error";
         this.statusText = message;
         this.permission = undefined;
+        this.cancelAllElicitations();
         this.ensureFallbackAuth();
         this.pushStatus();
         this.output.appendLine(message);
@@ -2636,7 +2741,7 @@ function formatToolSummary(
     }
 
     return {
-        title: rawTitle,
+        title: /^ask_question$/i.test(rawTitle) ? "交互式问答" : rawTitle,
         detail: existing?.detail,
         text: bodyText,
     };
@@ -2784,6 +2889,7 @@ function htmlFor(webview: vscode.Webview, extensionUri: vscode.Uri): string {
 <main id="messages"></main>
 <button id="scroll-bottom" class="scroll-bottom" type="button" hidden title="回到底部" aria-label="回到底部"><svg viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M24 10V36" stroke="currentColor" stroke-width="3.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 25L24 37L36 25" stroke="currentColor" stroke-width="3.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
 <footer>
+  <div id="elicitation" class="card" hidden></div>
   <div id="permission" class="card" hidden></div>
   <div id="auth" class="card" hidden></div>
   <div id="slash" hidden></div>
@@ -2796,7 +2902,7 @@ function htmlFor(webview: vscode.Webview, extensionUri: vscode.Uri): string {
     </div>
   </div>
   <div id="status-row" class="status-row">
-    <button id="statusline" class="status" type="button"></button>
+    <button id="statusline" class="status" type="button" data-state="connecting">等待连接</button>
     <button id="usage-pill" class="usage-pill" type="button" hidden></button>
   </div>
 </footer>

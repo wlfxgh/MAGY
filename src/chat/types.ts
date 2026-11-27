@@ -130,6 +130,44 @@ export interface AuthMethodView {
     name: string;
 }
 
+export type ElicitationAction = "accept" | "decline" | "cancel";
+
+export type ElicitationFieldKind = "single" | "multi" | "text" | "number" | "boolean";
+
+export interface ElicitationOption {
+    value: string;
+    label: string;
+    recommended?: boolean;
+}
+
+export interface ElicitationFieldView {
+    key: string;
+    kind: ElicitationFieldKind;
+    title: string;
+    description?: string;
+    required: boolean;
+    options?: ElicitationOption[];
+    otherKey?: string;
+    otherTitle?: string;
+    otherPlaceholder?: string;
+    defaultValue?: string | number | boolean | string[];
+    minimum?: number;
+    maximum?: number;
+    integer?: boolean;
+    minLength?: number;
+    maxLength?: number;
+    format?: string;
+}
+
+export interface ElicitationView {
+    requestId: string;
+    mode: "form" | "url";
+    title: string;
+    message: string;
+    fields: ElicitationFieldView[];
+    url?: string;
+}
+
 export interface PermissionView {
     requestId: string;
     title: string;
@@ -172,6 +210,7 @@ export interface ViewState {
     options: ConfigOptionView[];
     authMethods: AuthMethodView[];
     permission?: PermissionView;
+    elicitation?: ElicitationView;
     commands: CommandView[];
     settings?: SettingsView;
     tokenStats?: ChatTokenStats;
@@ -208,6 +247,7 @@ export type WebviewMessage =
     | { type: "setOption"; configId: string; value: string }
     | { type: "setMode"; modeId: string }
     | { type: "permission"; requestId: string; optionId: string }
+    | { type: "elicitation"; requestId: string; action: ElicitationAction; content?: Record<string, unknown> }
     | { type: "login"; methodId: string }
     | { type: "setProxy"; proxy: string }
     | { type: "updateSettings"; patch: SettingsPatch }

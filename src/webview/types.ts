@@ -7,6 +7,11 @@ import type {
     CodeAttachment,
     CommandView,
     ConfigOptionView,
+    ElicitationAction,
+    ElicitationFieldKind,
+    ElicitationFieldView,
+    ElicitationOption,
+    ElicitationView,
     HostMessage,
     LinkStatus,
     MessageRole,
@@ -34,6 +39,11 @@ export type {
     CodeAttachment,
     CommandView,
     ConfigOptionView,
+    ElicitationAction,
+    ElicitationFieldKind,
+    ElicitationFieldView,
+    ElicitationOption,
+    ElicitationView,
     HostMessage,
     LinkStatus,
     MessageRole,
@@ -92,6 +102,7 @@ export interface UiState {
     slashMoved: boolean;
     slashMatches: CommandView[];
     openPicker: OpenPickerState | null;
+    elicitationId: string;
     historyQuery: string;
     historyIndex: number;
     historyConfirmId: string;
