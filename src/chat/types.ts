@@ -202,6 +202,7 @@ export interface ViewState {
     statusText: string;
     runtimeLabel: string;
     runtimeInstalled: boolean;
+    authenticated: boolean;
     proxy: string;
     proxyUrl: string;
     usageText: string;
@@ -250,6 +251,8 @@ export type WebviewMessage =
     | { type: "permission"; requestId: string; optionId: string }
     | { type: "elicitation"; requestId: string; action: ElicitationAction; content?: Record<string, unknown> }
     | { type: "login"; methodId: string }
+    | { type: "logout" }
+    | { type: "exportChat"; id?: string }
     | { type: "setProxy"; proxy: string }
     | { type: "updateSettings"; patch: SettingsPatch }
     | { type: "setApiKey" }

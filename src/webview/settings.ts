@@ -149,6 +149,62 @@ export function renderSettings(ctx: SettingsContext, resetInputs: boolean): void
         const body = document.createElement("div");
         body.className = "settings-body";
 
+        const accountGroup = document.createElement("div");
+        accountGroup.className = "settings-group";
+        const accountTitle = document.createElement("div");
+        accountTitle.className = "settings-group-title";
+        accountTitle.textContent = "账号与登录";
+
+        const accountRow = document.createElement("div");
+        accountRow.className = "settings-account-row";
+        const accountStatus = document.createElement("div");
+        accountStatus.className = "settings-account-status";
+        const accountDot = document.createElement("span");
+        accountDot.className = "settings-account-dot";
+        accountDot.setAttribute("aria-hidden", "true");
+        const accountLabel = document.createElement("span");
+        accountLabel.className = "settings-account-text";
+        const accountTier = document.createElement("span");
+        accountTier.className = "usage-tier settings-account-tier";
+        accountTier.hidden = true;
+        accountStatus.append(accountDot, accountLabel, accountTier);
+        const accountNote = document.createElement("div");
+        accountNote.className = "settings-hint";
+        accountNote.textContent = "登录状态与本机 Antigravity 凭证共享";
+        accountRow.append(accountStatus, accountNote);
+
+        const accountActions = document.createElement("div");
+        accountActions.className = "settings-account-actions";
+        const googleBtn = document.createElement("button");
+        googleBtn.type = "button";
+        googleBtn.className = "settings-action-btn";
+        googleBtn.dataset.accountAction = "login";
+        googleBtn.textContent = "登录 Google";
+        googleBtn.addEventListener("click", () => {
+            setSettingsOpen(false);
+            vscode.postMessage({ type: "login", methodId: "oauth-personal" });
+        });
+        const logoutBtn = document.createElement("button");
+        logoutBtn.type = "button";
+        logoutBtn.className = "settings-action-btn danger";
+        logoutBtn.dataset.accountAction = "logout";
+        logoutBtn.textContent = "退出登录";
+        logoutBtn.addEventListener("click", () => {
+            setSettingsOpen(false);
+            vscode.postMessage({ type: "logout" });
+        });
+        const apiKeyBtn = document.createElement("button");
+        apiKeyBtn.type = "button";
+        apiKeyBtn.className = "settings-action-btn";
+        apiKeyBtn.dataset.accountAction = "apiKey";
+        apiKeyBtn.textContent = "API Key";
+        apiKeyBtn.addEventListener("click", () => {
+            setSettingsOpen(false);
+            vscode.postMessage({ type: "setApiKey" });
+        });
+        accountActions.append(googleBtn, logoutBtn, apiKeyBtn);
+        accountGroup.append(accountTitle, accountRow, accountActions);
+
         const displayGroup = document.createElement("div");
         displayGroup.className = "settings-group";
         const displayTitle = document.createElement("div");
@@ -466,24 +522,16 @@ export function renderSettings(ctx: SettingsContext, resetInputs: boolean): void
             });
             return btn;
         };
-        const loginBtn = document.createElement("button");
-        loginBtn.type = "button";
-        loginBtn.className = "settings-action-btn wide";
-        loginBtn.textContent = "登录 Google 账号";
-        loginBtn.addEventListener("click", () => {
-            setSettingsOpen(false);
-            vscode.postMessage({ type: "login", methodId: "oauth-personal" });
-        });
+        const logBtn = makeActionBtn("查看运行日志", "showLog", false);
+        logBtn.classList.add("wide");
         actGrid.append(
-            makeActionBtn("安装 / 更新内置版本", "install", true),
-            makeActionBtn("设置 Gemini API Key", "setApiKey", true),
-            makeActionBtn("查看运行日志", "showLog", false),
+            makeActionBtn("检查运行时更新", "install", true),
             makeActionBtn("重连反重力", "retry", true),
-            loginBtn,
+            logBtn,
         );
         actGroup.append(actTitle, actGrid);
 
-        body.append(displayGroup, netGroup, permGroup, pathGroup, actGroup);
+        body.append(accountGroup, displayGroup, netGroup, permGroup, pathGroup, actGroup);
         shell.append(head, body);
         settingsEl.append(shell);
     }
@@ -545,5 +593,41 @@ export function renderSettings(ctx: SettingsContext, resetInputs: boolean): void
     const proxyPending = Boolean(proxyEl && Number(proxyEl.dataset.pendingUntil || "0") > Date.now());
     if (resetInputs || !proxyPending) {
         syncProxyHint(settingsEl, cfg);
+    }
+
+    const authed = Boolean(ui.state.authenticated);
+    const busy = Boolean(ui.state.busy);
+    const dotEl = settingsEl.querySelector<HTMLElement>(".settings-account-dot");
+    const accTextEl = settingsEl.querySelector<HTMLElement>(".settings-account-text");
+    const tierEl = settingsEl.querySelector<HTMLElement>(".settings-account-tier");
+    const loginAccBtn = settingsEl.querySelector<HTMLButtonElement>('[data-account-action="login"]');
+    const logoutAccBtn = settingsEl.querySelector<HTMLButtonElement>('[data-account-action="logout"]');
+    const apiKeyAccBtn = settingsEl.querySelector<HTMLButtonElement>('[data-account-action="apiKey"]');
+    if (dotEl) {
+        dotEl.dataset.state = authed
+            ? "ready"
+            : (ui.state.status === "connecting" ? "connecting" : (ui.state.status === "auth" ? "auth" : "off"));
+    }
+    if (accTextEl) {
+        accTextEl.textContent = authed
+            ? "已登录 Antigravity"
+            : (!ui.state.runtimeInstalled
+                ? "尚未安装运行时"
+                : (ui.state.status === "connecting" ? "正在检查登录状态…" : "未登录"));
+    }
+    if (tierEl) {
+        const tierName = authed ? (ui.state.quota?.tier?.name || "") : "";
+        tierEl.textContent = tierName;
+        tierEl.hidden = !tierName;
+    }
+    if (loginAccBtn) {
+        loginAccBtn.textContent = authed ? "切换账号" : "登录 Google";
+        loginAccBtn.disabled = busy || !ui.state.runtimeInstalled;
+    }
+    if (logoutAccBtn) {
+        logoutAccBtn.disabled = busy || !authed;
+    }
+    if (apiKeyAccBtn) {
+        apiKeyAccBtn.disabled = busy;
     }
 }

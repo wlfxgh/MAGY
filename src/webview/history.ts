@@ -1,4 +1,4 @@
-import { ICON_CHAT, ICON_CLOSE, ICON_DELETE, ICON_IMPORT, ICON_PLUS, ICON_SEARCH } from "./icons";
+import { ICON_CHAT, ICON_CLOSE, ICON_DELETE, ICON_EXPORT, ICON_IMPORT, ICON_PLUS, ICON_SEARCH } from "./icons";
 import type { ChatMeta, UiState, VsCodeApi } from "./types";
 import { formatRelativeTime, formatTime, formatTokenCount, historyBucket } from "./utils";
 
@@ -41,6 +41,14 @@ export function renderHistory(ctx: HistoryContext): void {
 
         const headActions = document.createElement("div");
         headActions.className = "history-head-actions";
+        const exportBtn = document.createElement("button");
+        exportBtn.type = "button";
+        exportBtn.className = "history-head-btn";
+        exportBtn.title = "导出当前对话";
+        exportBtn.innerHTML = `${ICON_EXPORT}<span>导出</span>`;
+        exportBtn.addEventListener("click", () => {
+            vscode.postMessage({ type: "exportChat" });
+        });
         const newBtn = document.createElement("button");
         newBtn.type = "button";
         newBtn.className = "history-head-btn";
@@ -57,7 +65,7 @@ export function renderHistory(ctx: HistoryContext): void {
         closeBtn.setAttribute("aria-label", "关闭历史面板");
         closeBtn.innerHTML = ICON_CLOSE;
         closeBtn.addEventListener("click", () => setHistoryOpen(false));
-        headActions.append(newBtn, closeBtn);
+        headActions.append(exportBtn, newBtn, closeBtn);
         head.append(headLeft, headActions);
 
         const searchWrap = document.createElement("div");
@@ -346,6 +354,20 @@ export function renderHistoryItems(ctx: HistoryContext): void {
 
             main.append(top, sub);
 
+            const itemActions = document.createElement("div");
+            itemActions.className = "history-item-actions";
+
+            const exportItemBtn = document.createElement("button");
+            exportItemBtn.type = "button";
+            exportItemBtn.className = "history-export";
+            exportItemBtn.title = "导出对话";
+            exportItemBtn.setAttribute("aria-label", "导出对话");
+            exportItemBtn.innerHTML = ICON_EXPORT;
+            exportItemBtn.addEventListener("click", (event) => {
+                event.stopPropagation();
+                vscode.postMessage({ type: "exportChat", id: chat.id });
+            });
+
             const remove = document.createElement("button");
             remove.type = "button";
             remove.className = `history-del${isConfirming ? " confirming" : ""}`;
@@ -358,6 +380,7 @@ export function renderHistoryItems(ctx: HistoryContext): void {
                 renderHistoryConfirm(ctx);
                 renderHistoryItems(ctx);
             });
+            itemActions.append(exportItemBtn, remove);
 
             const selectThis = (): void => {
                 ui.historyConfirmId = "";
@@ -372,7 +395,7 @@ export function renderHistoryItems(ctx: HistoryContext): void {
                 }
             });
 
-            row.append(icon, main, remove);
+            row.append(icon, main, itemActions);
             listEl.append(row);
         }
     }

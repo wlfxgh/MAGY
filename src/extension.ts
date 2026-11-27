@@ -31,6 +31,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             return controller.addPaths(targets);
         }),
         vscode.commands.registerCommand("magy.installRuntime", () => controller.installRuntime()),
+        vscode.commands.registerCommand("magy.login", () => controller.loginGoogle()),
+        vscode.commands.registerCommand("magy.logout", () => controller.logout()),
+        vscode.commands.registerCommand("magy.exportChat", () => controller.exportChat()),
         vscode.commands.registerCommand("magy.setApiKey", () => controller.setApiKey()),
         vscode.commands.registerCommand("magy.toggleSkipPermissions", () => controller.toggleSkipPermissions()),
         vscode.commands.registerCommand("magy.openSettings", () => controller.toggleSettings()),

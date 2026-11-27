@@ -179,6 +179,7 @@ export function emptyState(): ViewState {
         statusText: "等待连接",
         runtimeLabel: "",
         runtimeInstalled: true,
+        authenticated: false,
         proxy: "",
         proxyUrl: "",
         usageText: "",

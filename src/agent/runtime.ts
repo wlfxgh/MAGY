@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { createAbortError, downloadVerified, fetchManifest, isAbortError } from "./download";
+import { createAbortError, downloadVerified, fetchManifest, isAbortError, type AgypManifest } from "./download";
 import { errorMessage, redactProxy } from "../util";
 
 export interface RuntimeInfo {
@@ -10,13 +10,52 @@ export interface RuntimeInfo {
     managed: boolean;
 }
 
+export interface UpdateCheckResult {
+    installedVersion: string;
+    latestVersion: string;
+    hasUpdate: boolean;
+    manifest: AgypManifest;
+}
+
 export interface EnsureOptions {
     proxy?: string;
     noProxy?: string;
     binaryPath?: string;
     force?: boolean;
+    manifest?: AgypManifest;
     signal?: AbortSignal;
     onProgress?: (text: string) => void;
+}
+
+/** Compares two dot-separated version strings (`v1.5.18` vs `1.5.17`). Returns >0 if `a > b`. */
+export function compareVersions(a: string, b: string): number {
+    const clean = (v: string): number[] | undefined => {
+        const normalized = String(v || "").trim().replace(/^v/i, "").split(/[-+]/)[0];
+        if (!normalized || !/^\d+(?:\.\d+)*$/.test(normalized)) {
+            return undefined;
+        }
+        return normalized.split(".").map((part) => Number.parseInt(part, 10));
+    };
+    const left = clean(a);
+    const right = clean(b);
+    if (!left && !right) {
+        return 0;
+    }
+    if (!left) {
+        return -1;
+    }
+    if (!right) {
+        return 1;
+    }
+    const len = Math.max(left.length, right.length);
+    for (let i = 0; i < len; i += 1) {
+        const x = left[i] ?? 0;
+        const y = right[i] ?? 0;
+        if (x !== y) {
+            return x > y ? 1 : -1;
+        }
+    }
+    return 0;
 }
 
 export class AgyRuntime {
@@ -44,6 +83,19 @@ export class AgyRuntime {
         return { binary, version, managed: true };
     }
 
+    async checkUpdate(options: Pick<EnsureOptions, "proxy" | "noProxy" | "signal"> = {}): Promise<UpdateCheckResult> {
+        const installed = await this.inspectInstalled();
+        const installedVersion = installed?.version && installed.version !== "未知" ? installed.version : "";
+        const manifest = await fetchManifest({ proxy: options.proxy, noProxy: options.noProxy, signal: options.signal });
+        const hasUpdate = !installed || !installedVersion || compareVersions(manifest.version, installedVersion) > 0;
+        return {
+            installedVersion,
+            latestVersion: manifest.version,
+            hasUpdate,
+            manifest,
+        };
+    }
+
     private async ensureInner(options: EnsureOptions): Promise<RuntimeInfo> {
         if (options.signal?.aborted) {
             throw createAbortError();
@@ -64,8 +116,11 @@ export class AgyRuntime {
             this.log(`使用插件目录中的反重力 ${version}：${binary}`);
             return { binary, version, managed: true };
         }
-        options.onProgress?.(`${lead}获取反重力版本`);
-        const manifest = await fetchManifest({ proxy: options.proxy, noProxy: options.noProxy, signal: options.signal });
+        let manifest = options.manifest;
+        if (!manifest) {
+            options.onProgress?.(`${lead}获取反重力版本`);
+            manifest = await fetchManifest({ proxy: options.proxy, noProxy: options.noProxy, signal: options.signal });
+        }
         if (options.signal?.aborted) {
             throw createAbortError();
         }

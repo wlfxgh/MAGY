@@ -581,6 +581,68 @@ button.danger {
   grid-column: 1 / -1;
 }
 
+.settings-action-btn.danger {
+  border-color: color-mix(in srgb, var(--vscode-errorForeground) 38%, var(--line));
+  color: var(--vscode-errorForeground);
+}
+
+.settings-action-btn.danger:hover:not(:disabled) {
+  border-color: var(--vscode-errorForeground);
+  background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent);
+}
+
+.settings-action-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
+}
+
+.settings-account-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.settings-account-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.settings-account-dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.settings-account-dot[data-state="ready"] {
+  background: var(--vscode-charts-green);
+}
+
+.settings-account-dot[data-state="connecting"] {
+  background: var(--accent);
+  animation: magy-pulse-soft 1.6s ease-in-out infinite;
+}
+
+.settings-account-dot[data-state="auth"] {
+  background: var(--warn);
+}
+
+.settings-account-text {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.settings-account-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
 .history-shell {
   display: flex;
   flex-direction: column;
@@ -789,7 +851,7 @@ button.danger {
 
 .history-item:hover,
 .history-item:focus-within {
-  padding-right: 34px;
+  padding-right: 58px;
 }
 
 .history-item:hover .history-time,
@@ -892,45 +954,57 @@ button.danger {
   white-space: nowrap;
 }
 
-.history-del {
+.history-item-actions {
   position: absolute;
   top: 50%;
-  right: 7px;
+  right: 6px;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  min-width: 24px;
-  height: 24px;
-  padding: 0 5px;
-  border-radius: 5px;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 22px;
+  gap: 2px;
   transform: translateY(-50%);
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.14s ease, background-color 0.14s ease, color 0.14s ease;
+  transition: opacity 0.14s ease;
 }
 
+.history-export,
+.history-del {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 5px;
+  color: var(--muted);
+  transition: background-color 0.14s ease, color 0.14s ease;
+}
+
+.history-export svg,
 .history-del svg {
   width: 14px;
   height: 14px;
 }
 
-.history-item:hover .history-del,
-.history-item:focus-within .history-del,
-.history-del.confirming {
+.history-item:hover .history-item-actions,
+.history-item:focus-within .history-item-actions,
+.history-item.deleting .history-item-actions {
   opacity: 1;
   pointer-events: auto;
 }
 
 .history-item.deleting {
-  padding-right: 32px;
+  padding-right: 58px;
   background: color-mix(in srgb, var(--vscode-errorForeground) 10%, transparent);
 }
 
 .history-item.deleting .history-time {
   opacity: 0;
+}
+
+.history-export:hover {
+  background: color-mix(in srgb, var(--ink) 10%, transparent);
+  color: var(--ink);
 }
 
 .history-del:hover,

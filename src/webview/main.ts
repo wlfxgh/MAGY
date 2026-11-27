@@ -41,6 +41,7 @@ const usageButton = document.getElementById("usage");
 const settingsButton = document.getElementById("settings");
 const createButton = document.getElementById("create");
 const importButton = document.getElementById("import");
+const exportButton = document.getElementById("export");
 const scrollBottomButton = document.getElementById("scroll-bottom") as HTMLButtonElement | null;
 
 const ui: UiState = {
@@ -207,6 +208,13 @@ importButton?.addEventListener("click", () => {
     setSettingsOpen(false);
     setUsageOpen(false);
     vscode.postMessage({ type: "importCursor" });
+});
+
+exportButton?.addEventListener("click", () => {
+    setHistoryOpen(false);
+    setSettingsOpen(false);
+    setUsageOpen(false);
+    vscode.postMessage({ type: "exportChat" });
 });
 
 historyButton.addEventListener("click", (event) => {

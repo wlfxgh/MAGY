@@ -8,7 +8,8 @@ import { FrameDecoder } from "./acp/framer";
 import { flattenOptions, mergeTokenUsage, readAntigravityTier, readPromptUsage } from "./acp/content";
 import { buildElicitationResponse, parseElicitationRequest } from "./acp/elicitation";
 import { createAbortError, downloadVerified, fetchManifest, isAbortError } from "./agent/download";
-import { AgyRuntime } from "./agent/runtime";
+import { AgyRuntime, compareVersions } from "./agent/runtime";
+import { formatChatAsJson, formatChatAsMarkdown, sanitizeExportFileName } from "./chat/export";
 import { parseCreditsCommandOutput, parseUsageCommandOutput } from "./agent/quota";
 import { displayLineRange, formatAttachedPrompt } from "./chat/prompt";
 import { ChatStore } from "./chat/store";
@@ -623,4 +624,64 @@ test("AgyRuntime.inspectInstalled detects missing and installed binaries accurat
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }
+});
+
+test("compareVersions handles semver, prefixes, and invalid inputs accurately", () => {
+    assert.equal(compareVersions("1.5.18", "1.5.17") > 0, true);
+    assert.equal(compareVersions("v1.10.0", "1.9.9") > 0, true);
+    assert.equal(compareVersions("1.5.18", "1.5.18"), 0);
+    assert.equal(compareVersions("1.5.17", "1.5.18") < 0, true);
+    assert.equal(compareVersions("1.5.18", "未知") > 0, true);
+});
+
+test("chat export formats Markdown, JSON, and safe filenames cleanly", () => {
+    assert.equal(sanitizeExportFileName('fix: bug <a/b> "test"?.md '), "fix bug a b test .md");
+    assert.equal(sanitizeExportFileName("   "), "magy-chat");
+
+    const chat = {
+        id: "c1",
+        title: "重构登录状态",
+        createdAt: 1700000000000,
+        updatedAt: 1700000005000,
+        needsContext: false,
+        tokenStats: {
+            contextUsed: 1200,
+            contextSize: 100000,
+            total: { inputTokens: 1000, outputTokens: 200, cachedReadTokens: 0, cachedWriteTokens: 0, thoughtTokens: 0, totalTokens: 1200 },
+            turns: 1,
+        },
+        messages: [
+            {
+                id: "m1",
+                role: "user" as const,
+                text: "解释下这里的实现",
+                attachments: [{
+                    id: "a1",
+                    kind: "selection" as const,
+                    fileName: "a.ts",
+                    relativePath: "src/a.ts",
+                    languageId: "typescript",
+                    startLine: 1,
+                    endLine: 2,
+                    text: "const x = ```1```;",
+                }],
+            },
+            { id: "m2", role: "thought" as const, text: "先分析登录逻辑", title: "思考" },
+            { id: "m3", role: "tool" as const, text: "ok", title: "读取文件", status: "completed", diffs: [{ path: "src/a.ts", oldText: "old", newText: "new" }] },
+            { id: "m4", role: "assistant" as const, text: "已经处理完毕。" },
+        ],
+    };
+
+    const md = formatChatAsMarkdown(chat);
+    assert.match(md, /^# 重构登录状态/);
+    assert.match(md, /累计 Token：1,200/);
+    assert.match(md, /````typescript/);
+    assert.match(md, /<summary>思考<\/summary>/);
+    assert.match(md, /### 工具：读取文件（completed）/);
+    assert.match(md, /## 助手\n\n已经处理完毕。/);
+
+    const json = JSON.parse(formatChatAsJson(chat)) as { version: number; chat: { title: string; messages: unknown[] } };
+    assert.equal(json.version, 1);
+    assert.equal(json.chat.title, "重构登录状态");
+    assert.equal(json.chat.messages.length, 4);
 });

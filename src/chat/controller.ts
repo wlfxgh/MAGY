@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
+import * as os from "node:os";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import * as vscode from "vscode";
-import { AcpConnection, isAuthError } from "../acp/connection";
+import { AcpConnection, RpcError, isAuthError } from "../acp/connection";
 import { contentText, emptyTokenUsage, extractDiffs, flattenOptions, mergeTokenUsage, readAntigravityTier, readAuthMethods, readPromptUsage, readStopReason } from "../acp/content";
 import { buildElicitationResponse, parseElicitationRequest } from "../acp/elicitation";
 import { ClientTools } from "../acp/tools";
@@ -14,6 +15,7 @@ import { CursorScanner } from "../cursor/scanner";
 import { buildContinuation, titleFrom, type TranscriptMessage } from "../cursor/parse";
 import { agentEnv, normalizeFontSize, readSettings, workspaceCwd, workspacePaths, type AgySettings } from "../settings";
 import { asRecord, clip, countDiffLines, errorMessage, normalizeProxy, redactProxy, resolveProxy, withNetworkHint } from "../util";
+import { formatChatAsJson, formatChatAsMarkdown, sanitizeExportFileName } from "./export";
 import { displayLineRange, formatAttachedPrompt } from "./prompt";
 import { blankMessage, ChatStore } from "./store";
 import type { AccountTierView, AuthMethodView, ChatRecord, ChatTokenStats, CodeAttachment, CommandView, ConfigOptionView, ElicitationAction, ElicitationView, HostMessage, LinkStatus, ModeView, PermissionView, QuotaBucketView, QuotaGroupView, QuotaStateView, StoredMessage, TokenUsage, ToolDiff, ViewState } from "./types";
@@ -239,23 +241,67 @@ export class ChatController implements vscode.Disposable {
 
     async installRuntime(): Promise<void> {
         if (this.busy) {
-            void vscode.window.showWarningMessage("当前正在生成，请稍后再更新反重力");
+            void vscode.window.showWarningMessage("当前正在生成，请稍后再检查更新");
             return;
         }
-        const prevVersion = /^内置\s+(.+)$/.exec(this.runtimeLabel)?.[1] ?? "";
+        const network = this.network();
+        const checkAbort = new AbortController();
+        let check;
+        try {
+            check = await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: "正在检查 Antigravity 更新",
+                cancellable: true,
+            }, (_progress, token) => {
+                token.onCancellationRequested(() => checkAbort.abort());
+                return this.runtime.checkUpdate({
+                    proxy: network.proxy,
+                    noProxy: network.noProxy,
+                    signal: checkAbort.signal,
+                });
+            });
+        } catch (error) {
+            if (isAbortError(error)) {
+                return;
+            }
+            void vscode.window.showErrorMessage(`检查更新失败：${withNetworkHint(error)}`);
+            return;
+        }
+        if (this.disposed) {
+            return;
+        }
+
+        if (!check.hasUpdate) {
+            const action = await vscode.window.showInformationMessage(
+                `当前内置 Antigravity 已是最新版本 (${check.installedVersion})。`,
+                "强制重新安装",
+            );
+            if (action !== "强制重新安装") {
+                return;
+            }
+        } else if (check.installedVersion) {
+            const action = await vscode.window.showInformationMessage(
+                `发现 Antigravity 新版本 ${check.latestVersion}（当前 ${check.installedVersion}），是否立即更新？`,
+                "立即更新",
+            );
+            if (action !== "立即更新") {
+                return;
+            }
+        }
+
         this.stopProcess();
         const gen = this.connectGeneration;
         const abort = new AbortController();
         this.connectAbort = abort;
         this.status = "connecting";
-        this.statusText = "正在更新反重力";
+        this.statusText = check.installedVersion ? `正在更新至 ${check.latestVersion}` : `正在下载 ${check.latestVersion}`;
         this.pushStatus();
         try {
-            const network = this.network();
             const info = await this.runtime.ensure({
                 proxy: network.proxy,
                 noProxy: network.noProxy,
                 force: true,
+                manifest: check.manifest,
                 signal: abort.signal,
                 onProgress: (text) => {
                     if (this.disposed || gen !== this.connectGeneration) {
@@ -273,15 +319,14 @@ export class ChatController implements vscode.Disposable {
             this.runtimeLabel = `内置 ${info.version}`;
             if (this.settings.binaryPath) {
                 this.status = "disconnected";
-                this.statusText = `已更新内置版本 ${info.version}（当前仍使用 magy.binaryPath 指定的路径）`;
+                this.statusText = `已安装 ${info.version}（当前仍使用 magy.binaryPath 指定的路径）`;
                 this.pushStatus();
                 return;
             }
-            const unchanged = Boolean(prevVersion && prevVersion === info.version);
             this.status = "connecting";
-            this.statusText = unchanged
-                ? `当前已是最新版本 ${info.version}，正在重连`
-                : `已更新至 ${info.version}，正在重连`;
+            this.statusText = check.hasUpdate
+                ? `已更新至 ${info.version}，正在重连`
+                : `已重新安装 ${info.version}，正在重连`;
             this.pushStatus();
             void this.rebindActiveAfterRestart();
         } catch (error) {
@@ -298,6 +343,101 @@ export class ChatController implements vscode.Disposable {
 
     async setApiKey(): Promise<void> {
         await this.login("gemini-api-key");
+    }
+
+    async loginGoogle(): Promise<void> {
+        await this.login("oauth-personal");
+    }
+
+    async logout(): Promise<void> {
+        if (this.busy) {
+            void vscode.window.showWarningMessage("当前正在生成，请先停止后再退出登录");
+            return;
+        }
+        const confirmed = await vscode.window.showWarningMessage(
+            "确定退出当前 Antigravity 登录状态吗？退出后本机共用该凭证的会话需要重新登录。",
+            { modal: true },
+            "退出登录",
+        );
+        if (confirmed !== "退出登录") {
+            return;
+        }
+        if (this.runtimeInstalled) {
+            try {
+                if (!this.connection || !this.initialized) {
+                    await this.ensureConnection();
+                }
+                const conn = this.connection;
+                if (conn && this.initialized) {
+                    try {
+                        await conn.request("logout", {}, 10000);
+                    } catch (error) {
+                        if (error instanceof RpcError && error.code === -32601) {
+                            await conn.request("auth/logout", {}, 10000);
+                        } else {
+                            throw error;
+                        }
+                    }
+                }
+            } catch (error) {
+                if (!isAbortError(error)) {
+                    this.output.appendLine(`退出登录通知失败：${withNetworkHint(error)}`);
+                }
+            }
+        }
+        await this.context.secrets.delete(API_KEY_SECRET);
+        await this.context.secrets.delete(LEGACY_API_KEY_SECRET);
+        this.hasAuthenticatedInSession = false;
+        this.hasEverAuthenticated = false;
+        await this.context.globalState.update(AUTH_CONFIRMED_KEY, false);
+        this.quota = { loading: false, groups: [] };
+        await this.context.globalState.update(CACHED_QUOTA_KEY, undefined);
+        this.activeSessionId = undefined;
+        if (this.active) {
+            this.active.acpSessionId = undefined;
+        }
+        this.stopProcess();
+        this.status = "auth";
+        this.statusText = "已退出登录，请重新登录";
+        this.ensureFallbackAuth();
+        this.pushStatus();
+        void vscode.window.showInformationMessage("已退出 Antigravity 登录");
+    }
+
+    async exportChat(chatId?: string): Promise<void> {
+        await this.flushSave();
+        const chat = chatId
+            ? (this.active?.id === chatId ? this.active : await this.store.get(chatId))
+            : this.active;
+        if (!chat || !chat.messages.length) {
+            void vscode.window.showInformationMessage("当前对话暂无可导出的内容");
+            return;
+        }
+        const baseDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || os.homedir();
+        const fileName = `${sanitizeExportFileName(chat.title)}.md`;
+        const defaultUri = vscode.Uri.file(path.join(baseDir, fileName));
+        const targetUri = await vscode.window.showSaveDialog({
+            defaultUri,
+            saveLabel: "导出对话",
+            filters: {
+                Markdown: ["md"],
+                JSON: ["json"],
+            },
+        });
+        if (!targetUri) {
+            return;
+        }
+        const isJson = targetUri.fsPath.toLowerCase().endsWith(".json");
+        const content = isJson ? formatChatAsJson(chat) : formatChatAsMarkdown(chat);
+        await fs.writeFile(targetUri.fsPath, content, "utf8");
+        const choice = await vscode.window.showInformationMessage(
+            `已导出对话至 ${path.basename(targetUri.fsPath)}`,
+            "打开文件",
+        );
+        if (choice === "打开文件") {
+            const doc = await vscode.workspace.openTextDocument(targetUri);
+            await vscode.window.showTextDocument(doc, { preview: true });
+        }
     }
 
     async toggleSkipPermissions(): Promise<void> {
@@ -526,6 +666,12 @@ export class ChatController implements vscode.Disposable {
                 }
                 case "login":
                     await this.login(String(record.methodId ?? ""));
+                    return;
+                case "logout":
+                    await this.logout();
+                    return;
+                case "exportChat":
+                    await this.exportChat(typeof record.id === "string" && record.id ? record.id : undefined);
                     return;
                 case "setProxy":
                     await this.setProxy(String(record.proxy ?? ""));
@@ -1197,7 +1343,10 @@ export class ChatController implements vscode.Disposable {
             }
         }
         const chat = await this.current();
-        this.quota.error = undefined;
+        chat.acpSessionId = undefined;
+        this.activeSessionId = undefined;
+        this.quota = { loading: false, groups: [] };
+        await this.context.globalState.update(CACHED_QUOTA_KEY, undefined);
         await this.bindSession(chat);
         if (this.pendingPrompt && this.status === "ready") {
             const pending = this.pendingPrompt;
@@ -2535,6 +2684,7 @@ export class ChatController implements vscode.Disposable {
             statusText: this.statusText,
             runtimeLabel: this.runtimeLabel,
             runtimeInstalled: this.runtimeInstalled,
+            authenticated: this.hasAuthenticatedInSession || this.status === "ready" || this.status === "running",
             proxy: this.proxyLabel(),
             proxyUrl: this.network().proxy,
             usageText: this.activeUsageText(),
@@ -3040,6 +3190,7 @@ function htmlFor(webview: vscode.Webview, extensionUri: vscode.Uri): string {
   <div class="bar-actions">
     <button id="history" class="tool" type="button" title="历史对话"><svg viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M5.81836 6.72729V14H13.0911" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 24C4 35.0457 12.9543 44 24 44C35.0457 44 44 35.0457 44 24C44 12.9543 35.0457 4 24 4C16.598 4 10.1351 8.02111 6.67677 13.9981" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M24.005 12L24.0038 24.0088L32.4832 32.4882" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span>历史</span></button>
     <button id="import" class="tool" type="button" title="引入 Cursor 对话"><svg viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M5 30L10 6H38L43 30" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 30H14.9091L16.7273 36H31.2727L33.0909 30H43V43H5V30Z" stroke="currentColor" stroke-width="3.6" stroke-linejoin="round"/><path d="M18 20L24 26L30 20" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M24 26V14" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span>引入</span></button>
+    <button id="export" class="tool" type="button" title="导出当前对话"><svg viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M5 30L10 6H38L43 30" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 30H14.9091L16.7273 36H31.2727L33.0909 30H43V43H5V30Z" stroke="currentColor" stroke-width="3.6" stroke-linejoin="round"/><path d="M18 19L24 13L30 19" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M24 13V25" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span>导出</span></button>
     <button id="create" class="tool" type="button" title="新对话"><svg viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M24.0605 10L24.0239 38" stroke="currentColor" stroke-width="3.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 24L38 24" stroke="currentColor" stroke-width="3.8" stroke-linecap="round" stroke-linejoin="round"/></svg><span>新建</span></button>
     <button id="usage" class="tool" type="button" title="剩余用量与 Token 统计"><svg viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M6 42H42" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/><rect x="10" y="24" width="6" height="12" rx="1" stroke="currentColor" stroke-width="3.6" stroke-linejoin="round"/><rect x="21" y="14" width="6" height="22" rx="1" stroke="currentColor" stroke-width="3.6" stroke-linejoin="round"/><rect x="32" y="8" width="6" height="28" rx="1" stroke="currentColor" stroke-width="3.6" stroke-linejoin="round"/></svg><span>用量</span></button>
     <button id="settings" class="tool" type="button" title="设置"><svg viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M18.2838 43.1713C14.9327 42.1736 11.9498 40.3213 9.58787 37.867C10.469 36.8227 11 35.4734 11 34.0001C11 30.6864 8.31371 28.0001 5 28.0001C4.79955 28.0001 4.60139 28.01 4.40599 28.0292C4.13979 26.7277 4 25.3803 4 24.0001C4 21.9095 4.32077 19.8938 4.91579 17.9995C4.94381 17.9999 4.97188 18.0001 5 18.0001C8.31371 18.0001 11 15.3138 11 12.0001C11 11.0488 10.7786 10.1493 10.3846 9.35011C12.6975 7.1995 15.5205 5.59002 18.6521 4.72314C19.6444 6.66819 21.6667 8.00013 24 8.00013C26.3333 8.00013 28.3556 6.66819 29.3479 4.72314C32.4795 5.59002 35.3025 7.1995 37.6154 9.35011C37.2214 10.1493 37 11.0488 37 12.0001C37 15.3138 39.6863 18.0001 43 18.0001C43.0281 18.0001 43.0562 17.9999 43.0842 17.9995C43.6792 19.8938 44 21.9095 44 24.0001C44 25.3803 43.8602 26.7277 43.594 28.0292C43.3986 28.01 43.2005 28.0001 43 28.0001C39.6863 28.0001 37 30.6864 37 34.0001C37 35.4734 37.531 36.8227 38.4121 37.867C36.0502 40.3213 33.0673 42.1736 29.7162 43.1713C28.9428 40.752 26.676 39.0001 24 39.0001C21.324 39.0001 19.0572 40.752 18.2838 43.1713Z" stroke="currentColor" stroke-width="3.6" stroke-linejoin="round"/><path d="M24 31C27.866 31 31 27.866 31 24C31 20.134 27.866 17 24 17C20.134 17 17 20.134 17 24C17 27.866 20.134 31 24 31Z" stroke="currentColor" stroke-width="3.6" stroke-linejoin="round"/></svg><span>设置</span></button>
