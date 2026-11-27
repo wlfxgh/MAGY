@@ -1,13 +1,38 @@
 {
   "name": "magy",
   "displayName": "MAGY",
-  "description": "在 Visual Studio Code 与 Cursor 的侧边栏中，通过 ACP 使用随扩展安装的反重力。代理同时用于官方运行时下载和对话连接。编辑器中的选中代码可加入当前对话。Cursor 中的既有对话可只读引入并继续，原记录保持不变。",
+  "description": "在 VS Code 和 Cursor 侧边栏中集成 Antigravity (ACP) 的 AI 编程助手，支持代码上下文引用、交互式问答、用量统计与 Cursor 对话导入。",
   "version": "0.2.0",
+  "publisher": "wlfxgh",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wlfxgh/MAGY.git"
+  },
+  "homepage": "https://github.com/wlfxgh/MAGY#readme",
+  "bugs": {
+    "url": "https://github.com/wlfxgh/MAGY/issues"
+  },
+  "galleryBanner": {
+    "color": "#111827",
+    "theme": "dark"
+  },
   "engines": {
-    "vscode": "^1.128.0"
+    "vscode": "^1.120.0"
   },
   "categories": [
-    "Other"
+    "AI",
+    "Chat"
+  ],
+  "keywords": [
+    "ai",
+    "agent",
+    "acp",
+    "antigravity",
+    "gemini",
+    "cursor",
+    "chat"
   ],
   "activationEvents": [],
   "main": "./out/extension.js",
@@ -147,27 +172,27 @@
         "magy.proxy": {
           "type": "string",
           "default": "",
-          "markdownDescription": "扩展内的 HTTP 代理，例如 `http://127.0.0.1:7890`。官方发布清单、反重力安装包下载，以及反重力进程的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 都使用这个地址。留空时，依次使用编辑器的 `http.proxy` 和环境变量中已有的代理。"
+          "markdownDescription": "HTTP 代理地址（例如 `http://127.0.0.1:7890`），用于运行时下载、认证与代理进程；留空时继承编辑器 `http.proxy` 及系统环境变量。"
         },
         "magy.noProxy": {
           "type": "string",
           "default": "localhost,127.0.0.1,::1",
-          "markdownDescription": "设置了 `magy.proxy` 时不走代理的主机。下载和反重力进程都遵守这份名单。"
+          "markdownDescription": "不走代理的主机列表，下载与代理进程均遵守该配置。"
         },
         "magy.binaryPath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "留空时使用插件存储目录中的反重力，不读取系统 PATH。仅在需要指定其他可执行文件时填写。"
+          "markdownDescription": "自定义 Antigravity 可执行文件路径；留空时使用扩展全局存储目录中的内置运行时。"
         },
         "magy.sandbox": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "为 `agy acp` 附加 `--sandbox`。"
+          "markdownDescription": "启动 `agy acp` 时附加 `--sandbox` 参数。"
         },
         "magy.dangerouslySkipPermissions": {
           "type": "boolean",
           "default": false,
-          "markdownDescription": "开启后为 `agy acp` 附加 `--dangerously-skip-permissions`，自动跳过所有编辑、命令与工具权限确认。"
+          "markdownDescription": "启用后为 `agy acp` 附加 `--dangerously-skip-permissions`，自动跳过工具、编辑与命令权限确认。"
         },
         "magy.extraArgs": {
           "type": "array",
@@ -175,19 +200,19 @@
           "items": {
             "type": "string"
           },
-          "markdownDescription": "附加在 `acp` 之后的其他自定义参数。"
+          "markdownDescription": "附加在 `acp` 子命令之后的自定义命令行参数。"
         },
         "magy.cursorDataDir": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Cursor 用户目录，只用于读取对话。留空时按当前操作系统的默认位置查找。"
+          "markdownDescription": "本地 Cursor 用户数据目录（只读读取对话记录）；留空时按系统默认路径查找。"
         },
         "magy.fontSize": {
           "type": "number",
           "default": 14,
           "minimum": 11,
           "maximum": 22,
-          "markdownDescription": "侧边栏默认字体大小（单位：px，范围 11–22，默认 14）。"
+          "markdownDescription": "侧边栏字体大小（单位：px，范围 11–22，默认 14）。"
         }
       }
     }
@@ -199,14 +224,18 @@
     "watch": "node esbuild.mjs --watch --with-tsc",
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src",
-    "test": "vscode-test"
+    "test": "vscode-test",
+    "package": "vsce package",
+    "publish:vsce": "vsce publish",
+    "publish:ovsx": "npx ovsx publish"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
     "@types/node": "24.x",
-    "@types/vscode": "^1.146.0",
+    "@types/vscode": "^1.120.0",
     "@vscode/test-cli": "^0.0.15",
     "@vscode/test-electron": "^3.0.0",
+    "@vscode/vsce": "^4.1.1",
     "esbuild": "^0.28.2",
     "eslint": "^10.5.0",
     "typescript": "^6.0.3",

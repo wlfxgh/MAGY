@@ -204,8 +204,8 @@ export class ChatController implements vscode.Disposable {
         const omitted = source.length - visible.length;
         const messages: StoredMessage[] = [
             blankMessage("system", omitted
-                ? `已引入 Cursor 对话「${title}」，较早的 ${omitted} 条未在侧边栏展开。Cursor 原记录未改动。下一条消息会把记录交给反重力。`
-                : `已引入 Cursor 对话「${title}」。Cursor 原记录未改动。下一条消息会把该记录作为上下文发给反重力。`, { imported: true }),
+                ? `已导入 Cursor 对话「${title}」（已折叠较早的 ${omitted} 条），发送消息时将作为上下文继续对话。`
+                : `已导入 Cursor 对话「${title}」，发送消息时将作为上下文继续对话。`, { imported: true }),
             ...visible.map((message) => fromTranscript(message)),
         ];
         await this.flushSave();
@@ -257,7 +257,7 @@ export class ChatController implements vscode.Disposable {
             this.runtimeLabel = `内置 ${info.version}`;
             this.status = "disconnected";
             this.statusText = this.settings.binaryPath
-                ? `已更新插件目录中的 ${info.version}。当前仍使用 magy.binaryPath 指定的文件`
+                ? `已更新内置版本 ${info.version}（当前仍使用 magy.binaryPath 指定的路径）`
                 : `已安装 ${info.version}`;
             this.pushStatus();
         } catch (error) {

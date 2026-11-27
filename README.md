@@ -1,37 +1,56 @@
 # MAGY
 
-在 Visual Studio Code 与 Cursor 的侧边栏中，通过 Agent Client Protocol 使用随扩展安装的反重力。代理同时用于官方运行时下载和对话连接。编辑器中的选中代码可加入当前对话。Cursor 中的既有对话可只读引入并继续，原记录保持不变。
+在 VS Code 与 Cursor 侧边栏中集成 Antigravity（ACP）的 AI 编程助手扩展，支持独立运行时管理、代码上下文引用、交互式问答、用量与 Token 统计以及 Cursor 对话导入。
 
-## 功能
+## 主要功能
 
-- 侧边栏流式对话，展示回复、工具调用、计划与权限请求
-- 在插件存储目录维护独立的反重力运行时，不写入系统 PATH
-- `magy.proxy` 同时用于官方发布清单、安装包下载，以及反重力进程
-- 在编辑器中选中代码或文本后，添加到当前对话；也可右键或 `Shift + 拖动` 文件/目录引入路径
-- 引入本机 Cursor 对话。读取使用只读方式，不修改、不删除 Cursor 原有记录
-- 查看账号剩余用量（5 小时 / 每周额度、AI 积分余额）与当前对话 Token 统计（上下文窗口占用与累计轮次统计）
+- **侧边栏流式对话**：实时展示模型回复、思考过程、文件 Diff、终端执行与权限确认请求。
+- **代码与路径上下文**：支持快捷键、右键菜单或 `Shift + 拖拽` 添加代码选区、文件及目录。
+- **交互式问答**：支持代理发起的单选、多选、开关、文本/数值表单以及浏览器外链授权确认。
+- **用量与 Token 统计**：展示当前对话上下文窗口占用、累计轮次 Token 消耗以及账号各模型组剩余额度。
+- **Cursor 对话导入**：支持只读扫描本机 Cursor 会话数据库与 Agent Transcript 记录，导入后延续上下文。
+- **内置设置与代理支持**：支持自定义 HTTP 代理、字体大小、沙盒模式、跳过权限确认以及本地二进制路径配置。
 
-## 设置
+## 快速开始
 
-| 设置 | 作用 |
+1. 安装扩展并在活动栏打开 **MAGY**。
+2. 首次启动会自动下载并准备 Antigravity 运行时至扩展全局存储目录（也可以在设置中通过 `magy.binaryPath` 指定已有可执行文件）。
+3. 点击 **Log in with Google** 完成授权，或在设置面板中配置 Gemini API Key。
+4. 在底部输入框直接发送任务。
+
+## 常用操作
+
+- **添加代码选区**：在编辑器中选中代码后右键点击「添加到 MAGY 对话」，或使用快捷键 `Ctrl+Alt+L`（macOS 为 `Cmd+Alt+L`）。
+- **添加文件 / 目录**：右键文件或目录选择「将路径添加到 MAGY 对话」，或按住 `Shift` 从资源管理器拖入输入框。
+- **导入 Cursor 对话**：点击顶栏导入按钮或执行命令 `MAGY: 引入 Cursor 对话`。
+- **查看用量**：点击顶栏「用量」、底部状态栏右侧用量指示器，或在输入框发送 `/usage`（或 `/quota`）。
+
+> 对话历史在打开工作区时保存于对应工作区存储目录，未打开文件夹时保存于全局存储目录。执行与协议日志可在「输出 -> MAGY」及存储目录 `logs/acp.log` 查看。
+
+## 配置项
+
+| 设置项 | 说明 |
 | --- | --- |
-| `magy.proxy` | HTTP 代理，例如 `http://127.0.0.1:7890`。清单下载、安装包下载和反重力进程都走这个地址。留空时，依次使用编辑器的 `http.proxy` 和环境变量中已有的代理 |
-| `magy.noProxy` | 不走代理的主机，默认 `localhost,127.0.0.1,::1`。下载与进程共用 |
-| `magy.binaryPath` | 指定可执行文件。留空时使用插件目录中的运行时 |
-| `magy.sandbox` | 为 `agy acp` 附加 `--sandbox` |
-| `magy.dangerouslySkipPermissions` | 开启后为 `agy acp` 附加 `--dangerously-skip-permissions`，自动跳过权限确认 |
-| `magy.extraArgs` | 附加在 `acp` 之后的参数 |
-| `magy.cursorDataDir` | Cursor 用户数据目录，只用于读取。留空时按操作系统默认路径查找 |
-| `magy.fontSize` | 侧边栏默认字体大小（单位：px，范围 11–22，默认 14） |
+| `magy.proxy` | HTTP 代理地址（如 `http://127.0.0.1:7890`），作用于运行时下载、认证与代理进程；留空时继承编辑器 `http.proxy` 与系统环境变量 |
+| `magy.noProxy` | 不走代理的主机列表，默认 `localhost,127.0.0.1,::1` |
+| `magy.binaryPath` | 自定义 `agy` 可执行文件路径；留空时使用扩展管理的内置运行时 |
+| `magy.sandbox` | 启动 `agy acp` 时附加 `--sandbox` 参数 |
+| `magy.dangerouslySkipPermissions` | 启用后附加 `--dangerously-skip-permissions`，自动批准所有工具、编辑与命令确认 |
+| `magy.extraArgs` | 附加在 `acp` 子命令后的自定义参数列表 |
+| `magy.cursorDataDir` | 自定义本机 Cursor 用户数据目录；留空时按系统默认路径自动探测 |
+| `magy.fontSize` | 侧边栏字体大小（px，范围 `11–22`，默认 `14`） |
 
-## 使用
+## 本地开发
 
-1. 打开活动栏中的 MAGY。首次打开时，按当前代理从官方发布清单下载运行时到插件的 `globalStorage/runtime` 目录。
-2. 按界面提示完成 Google 登录，或执行「MAGY: 设置 Gemini API Key」。
-3. 在编辑器中选中代码或文本，右键选择「添加到 MAGY 对话」，或按 `Ctrl+Alt+L`（macOS 为 `Cmd+Alt+L`）；也可右键文件/目录选择「将路径添加到 MAGY 对话」，或按住 `Shift` 从资源管理器拖入对话区。Enter 发送，Shift+Enter 换行。
-4. 需要沿用既有记录时，使用「引入 Cursor 对话」。来源包括 Cursor 的 composer 数据库，以及 `.cursor/projects` 下的 agent transcript。数据库以只读方式打开，并限制为查询语句。
-5. 点击顶栏「用量」、底部状态栏右侧用量胶囊，或在输入框发送 `/usage`（或 `/quota`），可打开用量面板查看账号各模型组剩余额度及当前对话 Token 统计。
+```bash
+npm install
+npm run compile
+npm run watch   # 启动增量监听；随后在 VS Code 中按 F5 调试扩展
+npm run lint
+node out/selftest.js
+npm run package # 生成 .vsix 安装包
+```
 
-侧边栏颜色、字体和控件跟随当前编辑器主题。更新运行时使用命令「MAGY: 安装或更新内置反重力」。连接与安装日志在输出通道 MAGY，ACP 详细日志在插件存储目录的 `logs/acp.log`。
+## License
 
-已打开工作区时，对话保存在该工作区的存储目录；未打开文件夹时，保存在全局存储目录。
+[MIT](LICENSE)

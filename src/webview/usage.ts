@@ -271,7 +271,7 @@ function renderQuotaSection(ui: UiState, vscode: VsCodeApi): HTMLDivElement {
     } else if (quota.fetchedAt) {
         const rel = formatRelativeTime(quota.fetchedAt);
         meta.textContent = rel === "刚刚" ? "刚刚更新" : `${rel}更新`;
-        meta.title = `上次刷新：${formatTime(quota.fetchedAt)}（仅手动刷新）`;
+        meta.title = `上次刷新：${formatTime(quota.fetchedAt)}`;
     }
     head.append(title, meta);
     group.append(head);
@@ -312,7 +312,7 @@ function renderQuotaSection(ui: UiState, vscode: VsCodeApi): HTMLDivElement {
         emptyRow.className = "usage-empty-row";
         const empty = document.createElement("div");
         empty.className = "usage-empty";
-        empty.textContent = "尚未获取账号剩余用量，点击「刷新」手动获取。";
+        empty.textContent = "尚未获取剩余用量，点击「刷新」获取。";
         const fetchBtn = document.createElement("button");
         fetchBtn.type = "button";
         fetchBtn.className = "settings-mini-btn";
@@ -355,7 +355,7 @@ function renderQuotaSection(ui: UiState, vscode: VsCodeApi): HTMLDivElement {
     if (quota.groups.length || quota.description) {
         const note = document.createElement("div");
         note.className = "usage-footnote";
-        note.textContent = "同组模型共享 5 小时与每周额度，点击右上角「刷新」手动更新。";
+        note.textContent = "同组模型共享 5 小时与每周额度。";
         group.append(note);
     }
 

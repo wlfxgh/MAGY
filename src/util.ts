@@ -80,12 +80,12 @@ export function withNetworkHint(error: unknown): string {
     const message = errorMessage(error);
     if (/dial tcp|connectex|oauth2\.googleapis|couldn'?t sign in|couldn'?t complete sign-in/i.test(message)) {
         const lead = /dial tcp/i.test(message)
-            ? "登录没有完成：反重力在直接连接 Google，没有走代理。"
-            : "登录没有完成：连接 Google 失败。";
-        return `${lead}在登录卡片的「代理」中填写可用地址；留空时使用编辑器的 http.proxy。\n${message}`;
+            ? "登录失败：当前请求未经过代理。"
+            : "登录失败：无法连接到 Google。";
+        return `${lead}可在设置中配置 HTTP 代理，或留空以继承编辑器 http.proxy。\n${message}`;
     }
     if (/ENOTFOUND|ETIMEDOUT|ECONNREFUSED|ECONNRESET|ECONNABORTED|代理|timeout|timed out|network|ENETUNREACH|证书|certificate/i.test(message)) {
-        return `${message}。若当前网络不能直接访问目标地址，在登录卡片的「代理」中填写可用地址；留空时使用编辑器的 http.proxy。`;
+        return `${message}。如受网络限制，可在设置中配置 HTTP 代理（留空时继承编辑器 http.proxy）。`;
     }
     return message;
 }

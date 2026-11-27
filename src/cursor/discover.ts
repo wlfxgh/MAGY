@@ -504,7 +504,7 @@ async function withDb<T>(file: string, run: (db: SqliteDatabase) => T | Promise<
         try {
             db.exec("PRAGMA query_only = ON");
         } catch {
-            // 只读打开已经禁止写入原库。
+            // Read-only connection already blocks writes on older SQLite builds.
         }
         return await run(readOnlyDb(db));
     } finally {

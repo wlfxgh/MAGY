@@ -17,8 +17,8 @@ import { cursorProjectKey, pathsEqual } from "./cursor/paths";
 import { bypassesProxy, countDiffLines, normalizeProxy, resolveProxy } from "./util";
 
 test("cursor project key matches the local folder encoding", () => {
-    assert.equal(cursorProjectKey("c:\\Project\\Mine\\mine-demo"), "c-Project-Mine-mine-demo");
-    assert.equal(cursorProjectKey("/Users/TXAIR/demo_app"), "Users-TXAIR-demo-app");
+    assert.equal(cursorProjectKey("c:\\workspace\\demo-project"), "c-workspace-demo-project");
+    assert.equal(cursorProjectKey("/Users/dev/demo_app"), "Users-dev-demo-app");
 });
 
 test("proxy value gets a scheme when missing", () => {
